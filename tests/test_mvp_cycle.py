@@ -156,3 +156,21 @@ def test_weak_match_is_only_proposed(lens):
     assert lens.treemap(*OCT)["total"] == "20.00"
     lens.decide_link(str(link["id"]), accept=True)
     assert lens.operation_detail(op)["verification"] == "confirmed"
+
+
+def test_scanned_pdf_and_tags(lens):
+    import io
+
+    from PIL import Image
+
+    jpg = render_invoice_photo(["Garage Meier GmbH", "Rechnung 881", "Datum: 04.10.2026",
+                                "Service Velo und Bremsen", "Total CHF 312.40"], noise=False, tilt=0)
+    buf = io.BytesIO()
+    Image.open(io.BytesIO(jpg)).save(buf, "PDF", resolution=150)
+    res = lens.ingest(buf.getvalue(), "scan.pdf")
+    op = lens.operation_detail(res.operation_ids[0])
+    assert op["amount"] == "312.40" and op["category_path"] == ["Transport", "Car repairs"]
+    lens.tag(res.operation_ids[0], "car")
+    assert lens.operation_detail(res.operation_ids[0])["tags"] == ["car"]
+    folder = lens.documents()[0]["folder"]
+    assert folder == "2026/UNPAID_INVOICES"

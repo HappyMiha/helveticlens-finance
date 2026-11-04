@@ -1,20 +1,47 @@
-"""Local FastAPI service used by the desktop app.
+"""Local HTTP API over the Financial Lens service.
 
-Binds to 127.0.0.1 by default. In local-only privacy mode nothing here makes
-an outbound request.
+Run: FL_DSN="host=localhost dbname=fl user=fl" FL_DATA=~/FinancialLens \
+     uvicorn financial_lens.api.app:app --host 127.0.0.1
+It binds to loopback by default and makes no outbound requests in local-only mode.
 """
 
 from __future__ import annotations
 
-from fastapi import FastAPI, HTTPException, UploadFile
+import os
+from datetime import date
+from functools import lru_cache
+from typing import Optional
 
-from ..domain.events import Ledger, SourceDocument
-from ..ingest import camt053
-from ..matching.reconcile import reconcile
-from ..views import treemap
+from fastapi import Depends, FastAPI, HTTPException, UploadFile
+from fastapi.responses import Response
+from pydantic import BaseModel
 
-app = FastAPI(title="Financial Lens", version="0.1.0")
-ledger = Ledger()
+from ..service import FinancialLens
+
+app = FastAPI(title="Financial Lens", version="0.2.0")
+
+
+@lru_cache(maxsize=1)
+def _lens() -> FinancialLens:
+    lens = FinancialLens(os.environ.get("FL_DSN", "dbname=financial_lens"),
+                         os.path.expanduser(os.environ.get("FL_DATA", "~/FinancialLens")),
+                         actor=os.environ.get("FL_ACTOR", "user:local"))
+    lens.migrate()
+    lens.open_organization(os.environ.get("FL_ORG", "Personal"), os.environ.get("FL_ORG_KIND", "personal"))
+    return lens
+
+
+def lens() -> FinancialLens:
+    return _lens()
+
+
+def _period(start: Optional[date], end: Optional[date]) -> tuple[date, date]:
+    today = date.today()
+    start = start or today.replace(day=1)
+    end = end or today
+    if end < start:
+        raise HTTPException(422, "The end date is before the start date.")
+    return start, end
 
 
 @app.get("/health")
@@ -22,32 +49,117 @@ def health() -> dict:
     return {"status": "ok"}
 
 
-@app.post("/imports/bank-statement")
-async def import_statement(file: UploadFile) -> dict:
-    data = await file.read()
-    doc = ledger.add_document(SourceDocument.from_bytes(
-        file.filename or "statement.xml", file.content_type or "application/xml", data))
+@app.post("/documents")
+async def upload(files: list[UploadFile], privacy: str = "local_only", fl: FinancialLens = Depends(lens)) -> list[dict]:
+    if privacy not in ("local_only", "swiss_hosted", "cloud_ai"):
+        raise HTTPException(422, "Unknown privacy level.")
+    out = []
+    for f in files:
+        res = fl.ingest(await f.read(), f.filename or "upload", f.content_type
+                        if f.content_type not in (None, "application/octet-stream") else None, privacy)
+        out.append(res.__dict__)
+    return out
+
+
+@app.get("/documents")
+def documents(fl: FinancialLens = Depends(lens)) -> list[dict]:
+    return fl.documents()
+
+
+@app.get("/documents/{document_id}/original")
+def original(document_id: str, fl: FinancialLens = Depends(lens)) -> Response:
     try:
-        payments = camt053.parse(data, doc.id)
-    except Exception as exc:  # malformed XML is a user-facing error, not a crash
-        raise HTTPException(422, f"Could not read the statement: {exc}") from exc
-    for payment in payments:
-        ledger.record_payment(payment)
-    return {"document_id": doc.id, "sha256": doc.sha256, "payments": len(payments)}
+        data, media, name = fl.original(document_id)
+    except TypeError:
+        raise HTTPException(404, "Document not found.")
+    return Response(data, media_type=media, headers={"Content-Disposition": f'inline; filename="{name}"'})
 
 
-@app.get("/reconciliation")
-def reconciliation() -> dict:
-    matches, ambiguous = reconcile(ledger.current_expenses(), ledger.current_payments())
-    return {
-        "matches": [{"expense_id": m.expense_id, "payment_id": m.payment_id,
-                     "rule": m.rule, "reasons": list(m.reasons)} for m in matches],
-        "ambiguous": [{"expense_id": a.expense_id,
-                       "candidates": list(a.candidate_payment_ids),
-                       "reason": a.reason} for a in ambiguous],
-    }
+@app.get("/dashboard")
+def dashboard(start: Optional[date] = None, end: Optional[date] = None, fl: FinancialLens = Depends(lens)) -> dict:
+    return fl.dashboard(*_period(start, end))
 
 
 @app.get("/treemap")
-def treemap_view(currency: str = "CHF") -> dict:
-    return treemap.build(ledger.current_expenses(), currency).to_dict()
+def treemap(start: Optional[date] = None, end: Optional[date] = None, mode: str = "expenses",
+            fl: FinancialLens = Depends(lens)) -> dict:
+    if mode not in ("expenses", "income"):
+        raise HTTPException(422, "mode is expenses or income")
+    return fl.treemap(*_period(start, end), mode)
+
+
+@app.get("/operations")
+def operations(start: Optional[date] = None, end: Optional[date] = None, category: str = "",
+               fl: FinancialLens = Depends(lens)) -> list[dict]:
+    path = tuple(p for p in category.split("/") if p)
+    return fl.operations(*_period(start, end), path)
+
+
+@app.get("/operations/{op_id}")
+def operation(op_id: str, fl: FinancialLens = Depends(lens)) -> dict:
+    try:
+        return fl.operation_detail(op_id)
+    except TypeError:
+        raise HTTPException(404, "Operation not found.")
+
+
+class Manual(BaseModel):
+    kind: str = "expense"
+    amount: str
+    currency: str = "CHF"
+    op_date: date
+    counterparty: str
+    category: Optional[list[str]] = None
+    description: str = ""
+
+
+@app.post("/operations")
+def add_operation(body: Manual, fl: FinancialLens = Depends(lens)) -> dict:
+    op = fl.add_manual(body.kind, body.amount, body.currency, body.op_date, body.counterparty,
+                       tuple(body.category) if body.category else None, body.description)
+    return {"id": op}
+
+
+class Correction(BaseModel):
+    changes: dict
+    reason: str
+
+
+@app.post("/operations/{op_id}/corrections")
+def correct(op_id: str, body: Correction, fl: FinancialLens = Depends(lens)) -> dict:
+    allowed = {"amount", "currency", "op_date", "due_date", "counterparty", "description", "category", "confirm"}
+    if set(body.changes) - allowed:
+        raise HTTPException(422, f"Only {sorted(allowed)} can be corrected.")
+    return {"revision_id": fl.correct(op_id, body.changes, body.reason)}
+
+
+class Decision(BaseModel):
+    accept: bool
+
+
+@app.post("/links/{link_id}/decision")
+def decide(link_id: str, body: Decision, fl: FinancialLens = Depends(lens)) -> dict:
+    fl.decide_link(link_id, body.accept)
+    return {"status": "confirmed" if body.accept else "rejected"}
+
+
+@app.get("/categories")
+def categories(fl: FinancialLens = Depends(lens)) -> list[dict]:
+    return fl.categories()
+
+
+class Rule(BaseModel):
+    field: str = "counterparty"
+    pattern: str
+    category: list[str]
+
+
+@app.post("/rules")
+def add_rule(body: Rule, fl: FinancialLens = Depends(lens)) -> dict:
+    fl.add_rule(body.field, body.pattern, tuple(body.category))
+    return {"status": "ok"}
+
+
+@app.get("/ai-activity")
+def ai_activity(fl: FinancialLens = Depends(lens)) -> list[dict]:
+    return fl.ai_activity()

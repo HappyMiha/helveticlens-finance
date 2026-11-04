@@ -249,6 +249,11 @@ class FinancialLens:
         """A person corrects or confirms a record. Creates a revision; never overwrites."""
         actor = actor or self.actor
         values = dict(changes)
+        for k in ("op_date", "due_date"):
+            if isinstance(values.get(k), str):
+                values[k] = date.fromisoformat(values[k])
+        if "amount" in values:
+            values["amount"] = Decimal(str(values["amount"]))
         if "category" in values:
             path = tuple(values.pop("category"))
             values["category_id"] = self.category_id(path)
@@ -521,11 +526,11 @@ class FinancialLens:
     def _confirm_pair(self, e: dict, p: dict, rule: str) -> None:
         eid, pid = str(e["operation_id"]), str(p["operation_id"])
         if e["verification"] != "needs_review":
-            self._revision(eid, {"verification": "confirmed", "agent": "engine:reconcile", "method": "rule",
+            self._revision(eid, {"verification": "confirmed", "agent": "engine:reconcile",
                                  "verification_reason": "Document and bank payment agree (" + rule + ")"},
                            "linked to bank payment")
         self._revision(pid, {"verification": "confirmed" if e["verification"] != "needs_review" else "needs_review",
-                             "category_id": e["category_id"], "agent": "engine:reconcile", "method": "rule",
+                             "category_id": e["category_id"], "agent": "engine:reconcile",
                              "verification_reason": "Payment matches a recorded document (" + rule + ")"},
                        "linked to document")
         self.db.execute("INSERT INTO document_operations SELECT document_id, %s, 'attachment' FROM document_operations "
@@ -546,6 +551,25 @@ class FinancialLens:
                 self._confirm_pair(e, p, link["rule"] + f", confirmed by {actor}")
         if not accept:
             self.reconcile()
+
+    def tag(self, op: str, name: str) -> None:
+        with self.db.transaction():
+            row = self.db.execute("INSERT INTO tags (id, organization_id, name) VALUES (%s,%s,%s) "
+                                  "ON CONFLICT (organization_id, name) DO UPDATE SET name=EXCLUDED.name RETURNING id",
+                                  (_uuid(), self.org, name.strip())).fetchone()
+            self.db.execute("INSERT INTO operation_tags VALUES (%s,%s) ON CONFLICT DO NOTHING", (op, row["id"]))
+            self._audit("tag", "operation", op, {"tag": name})
+
+    def untag(self, op: str, name: str) -> None:
+        with self.db.transaction():
+            self.db.execute("DELETE FROM operation_tags t USING tags g WHERE t.tag_id=g.id AND t.operation_id=%s "
+                            "AND g.name=%s", (op, name))
+            self._audit("untag", "operation", op, {"tag": name})
+
+    def tags(self, op: str) -> list[str]:
+        return [r["name"] for r in self.db.execute(
+            "SELECT g.name FROM operation_tags t JOIN tags g ON g.id=t.tag_id WHERE t.operation_id=%s ORDER BY g.name",
+            (op,)).fetchall()]
 
     # ---------------------------------------------------------------- views
     def _spend_rows(self, start: date, end: date) -> list[dict]:
@@ -690,6 +714,7 @@ class FinancialLens:
         result["extractions"] = [self._json(e) for e in extractions]
         result["links"] = [self._json(l) for l in links]
         result["audit"] = [self._json(a) for a in audit]
+        result["tags"] = self.tags(op)
         return result
 
     def original(self, document_id: str) -> tuple[bytes, str, str]:
