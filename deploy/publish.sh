@@ -23,6 +23,7 @@ mkdir -p deploy/cloudflared
 if ! ls deploy/cloudflared/*.json >/dev/null 2>&1; then
   $CF --cred-file /out/tunnel.json create helveticlens-finance
 fi
+chmod 0644 deploy/cloudflared/tunnel.json  # cloudflared runs as uid 65532 in the container
 ID=$(python3 -c 'import json;print(json.load(open("deploy/cloudflared/tunnel.json"))["TunnelID"])')
 cat > deploy/cloudflared/config.yml <<CFG
 tunnel: $ID
