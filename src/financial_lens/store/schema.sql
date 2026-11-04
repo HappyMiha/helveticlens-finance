@@ -1,0 +1,224 @@
+-- Financial Lens schema v1 (PostgreSQL 15+).
+-- Five things are kept apart (§5): originals (files on disk, referenced by
+-- sha256), processed data (extractions), operations (append-only revisions),
+-- links, and metadata with history (audit_log).
+
+CREATE TABLE IF NOT EXISTS schema_version (version int PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT now());
+
+CREATE TABLE IF NOT EXISTS organizations (
+  id uuid PRIMARY KEY,
+  name text NOT NULL,
+  kind text NOT NULL CHECK (kind IN ('personal','business','cooperative')),
+  base_currency char(3) NOT NULL DEFAULT 'CHF',
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS users (
+  id uuid PRIMARY KEY,
+  name text NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS memberships (
+  organization_id uuid NOT NULL REFERENCES organizations(id),
+  user_id uuid NOT NULL REFERENCES users(id),
+  role text NOT NULL CHECK (role IN ('owner','admin','editor','viewer','member')),
+  PRIMARY KEY (organization_id, user_id)
+);
+
+CREATE TABLE IF NOT EXISTS accounts (
+  id uuid PRIMARY KEY,
+  organization_id uuid NOT NULL REFERENCES organizations(id),
+  name text NOT NULL,
+  iban text,
+  currency char(3) NOT NULL DEFAULT 'CHF',
+  kind text NOT NULL DEFAULT 'bank' CHECK (kind IN ('bank','cash','card','other')),
+  UNIQUE (organization_id, iban)
+);
+
+CREATE TABLE IF NOT EXISTS documents (
+  id uuid PRIMARY KEY,
+  organization_id uuid NOT NULL REFERENCES organizations(id),
+  sha256 char(64) NOT NULL,
+  filename text NOT NULL,
+  media_type text NOT NULL,
+  size_bytes bigint NOT NULL,
+  storage_key text NOT NULL,
+  privacy text NOT NULL CHECK (privacy IN ('cloud_ai','swiss_hosted','local_only')),
+  doc_type text NOT NULL DEFAULT 'unknown',
+  doc_type_confidence numeric(4,3),
+  processing_status text NOT NULL DEFAULT 'received'
+    CHECK (processing_status IN ('received','processing','processed','needs_review','failed')),
+  folder text,                         -- proposed storage path (§5), virtual
+  received_at timestamptz NOT NULL DEFAULT now(),
+  received_by text NOT NULL,
+  UNIQUE (organization_id, sha256)
+);
+
+CREATE TABLE IF NOT EXISTS extractions (
+  id uuid PRIMARY KEY,
+  document_id uuid NOT NULL REFERENCES documents(id),
+  engine text NOT NULL,                -- tesseract-5.3, pdftotext, qr-zbar, camt-parser, llm:<model>
+  text text,
+  fields jsonb NOT NULL DEFAULT '{}',  -- {field: {value, location, quote, confidence, method}}
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS categories (
+  id uuid PRIMARY KEY,
+  organization_id uuid NOT NULL REFERENCES organizations(id),
+  parent_id uuid REFERENCES categories(id),
+  name text NOT NULL,
+  kind text NOT NULL CHECK (kind IN ('expense','income','transfer','unclassified')),
+  archived boolean NOT NULL DEFAULT false,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS categories_unique_name
+  ON categories (organization_id, coalesce(parent_id, '00000000-0000-0000-0000-000000000000'::uuid), lower(name));
+
+CREATE TABLE IF NOT EXISTS projects (
+  id uuid PRIMARY KEY,
+  organization_id uuid NOT NULL REFERENCES organizations(id),
+  name text NOT NULL,
+  UNIQUE (organization_id, name)
+);
+
+-- An operation is an identity; its content lives in append-only revisions.
+CREATE TABLE IF NOT EXISTS operations (
+  id uuid PRIMARY KEY,
+  organization_id uuid NOT NULL REFERENCES organizations(id),
+  kind text NOT NULL CHECK (kind IN ('invoice','receipt','expense','income','payment','transfer','refund','payslip','contribution')),
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS operation_revisions (
+  id uuid PRIMARY KEY,
+  operation_id uuid NOT NULL REFERENCES operations(id),
+  revision int NOT NULL,
+  amount numeric(20,4) NOT NULL,       -- signed: negative = money out (payments only)
+  currency char(3) NOT NULL,
+  fx_rate numeric(20,10),
+  fx_source text,
+  op_date date NOT NULL,
+  due_date date,
+  counterparty text NOT NULL DEFAULT '',
+  description text NOT NULL DEFAULT '',
+  category_id uuid REFERENCES categories(id),
+  project_id uuid REFERENCES projects(id),
+  account_id uuid REFERENCES accounts(id),
+  reference text,                      -- QR / SCOR reference
+  bank_reference text,                 -- AcctSvcrRef, for duplicate detection
+  period text,                         -- e.g. 2026-10
+  verification text NOT NULL CHECK (verification IN ('confirmed','needs_review','unconfirmed')),
+  verification_reason text NOT NULL DEFAULT '',
+  source_document_id uuid REFERENCES documents(id),
+  method text NOT NULL,                -- manual, ocr, structured_import, ai_extraction, rule
+  agent text NOT NULL,                 -- who/what produced this revision
+  confidence numeric(4,3),
+  provenance jsonb NOT NULL DEFAULT '{}',  -- per-field provenance
+  change_reason text NOT NULL DEFAULT '',
+  created_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (operation_id, revision)
+);
+CREATE INDEX IF NOT EXISTS opr_by_op ON operation_revisions (operation_id, revision DESC);
+
+CREATE OR REPLACE VIEW operations_current AS
+SELECT DISTINCT ON (r.operation_id)
+  o.organization_id, o.kind, o.created_at AS operation_created_at, r.*
+FROM operation_revisions r JOIN operations o ON o.id = r.operation_id
+ORDER BY r.operation_id, r.revision DESC;
+
+CREATE TABLE IF NOT EXISTS tags (
+  id uuid PRIMARY KEY,
+  organization_id uuid NOT NULL REFERENCES organizations(id),
+  name text NOT NULL,
+  UNIQUE (organization_id, name)
+);
+CREATE TABLE IF NOT EXISTS operation_tags (
+  operation_id uuid NOT NULL REFERENCES operations(id),
+  tag_id uuid NOT NULL REFERENCES tags(id),
+  PRIMARY KEY (operation_id, tag_id)
+);
+
+CREATE TABLE IF NOT EXISTS document_operations (
+  document_id uuid NOT NULL REFERENCES documents(id),
+  operation_id uuid NOT NULL REFERENCES operations(id),
+  role text NOT NULL,                  -- source, attachment, statement
+  PRIMARY KEY (document_id, operation_id, role)
+);
+
+-- Many-to-many links between operations (§4.5).
+CREATE TABLE IF NOT EXISTS links (
+  id uuid PRIMARY KEY,
+  organization_id uuid NOT NULL REFERENCES organizations(id),
+  from_operation_id uuid NOT NULL REFERENCES operations(id),  -- e.g. the invoice
+  to_operation_id uuid NOT NULL REFERENCES operations(id),    -- e.g. the payment
+  link_type text NOT NULL CHECK (link_type IN ('payment','receipt','refund','settlement','duplicate','transfer','contribution')),
+  amount numeric(20,4),                -- portion covered, for partial payments
+  currency char(3),
+  rule text NOT NULL,
+  reasons jsonb NOT NULL DEFAULT '[]',
+  status text NOT NULL CHECK (status IN ('proposed','confirmed','rejected')),
+  created_by text NOT NULL,
+  decided_by text,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  decided_at timestamptz,
+  UNIQUE (from_operation_id, to_operation_id, link_type)
+);
+
+CREATE TABLE IF NOT EXISTS classification_rules (
+  id uuid PRIMARY KEY,
+  organization_id uuid NOT NULL REFERENCES organizations(id),
+  field text NOT NULL CHECK (field IN ('counterparty','description','iban')),
+  pattern text NOT NULL,               -- case-insensitive substring
+  category_id uuid REFERENCES categories(id),
+  project_id uuid REFERENCES projects(id),
+  origin text NOT NULL CHECK (origin IN ('user','learned','builtin')),
+  created_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (organization_id, field, pattern)
+);
+
+-- What AI or automation did (§13 "AI Activity").
+CREATE TABLE IF NOT EXISTS ai_activity (
+  id bigserial PRIMARY KEY,
+  organization_id uuid NOT NULL REFERENCES organizations(id),
+  at timestamptz NOT NULL DEFAULT now(),
+  task text NOT NULL,                  -- ocr, recognise, extract, classify, match, ask
+  provider text NOT NULL,
+  locality text NOT NULL CHECK (locality IN ('local','swiss','external','none')),
+  document_id uuid REFERENCES documents(id),
+  operation_id uuid REFERENCES operations(id),
+  summary text NOT NULL,
+  details jsonb NOT NULL DEFAULT '{}'
+);
+
+CREATE TABLE IF NOT EXISTS audit_log (
+  id bigserial PRIMARY KEY,
+  organization_id uuid,
+  at timestamptz NOT NULL DEFAULT now(),
+  actor text NOT NULL,
+  action text NOT NULL,
+  entity text NOT NULL,
+  entity_id text NOT NULL,
+  details jsonb NOT NULL DEFAULT '{}'
+);
+
+-- History is append-only: revisions, extractions and the audit log cannot be
+-- changed or deleted through the application role.
+CREATE OR REPLACE FUNCTION fl_forbid_change() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  RAISE EXCEPTION 'Financial Lens: % on % is not allowed (append-only history)', TG_OP, TG_TABLE_NAME;
+END $$;
+
+DO $$
+DECLARE t text;
+BEGIN
+  FOREACH t IN ARRAY ARRAY['operation_revisions','extractions','audit_log','ai_activity'] LOOP
+    IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = t || '_append_only') THEN
+      EXECUTE format('CREATE TRIGGER %I BEFORE UPDATE OR DELETE ON %I FOR EACH ROW EXECUTE FUNCTION fl_forbid_change()',
+                     t || '_append_only', t);
+    END IF;
+  END LOOP;
+END $$;
+
+INSERT INTO schema_version (version) VALUES (1) ON CONFLICT DO NOTHING;

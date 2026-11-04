@@ -70,3 +70,12 @@ def parse(xml_bytes: bytes, document_id: str) -> list[Payment]:
             ),
         ))
     return payments
+
+
+def account_iban(xml_bytes: bytes):
+    """IBAN of the statement's own account, if present."""
+    root = ET.fromstring(xml_bytes)
+    for stmt in root.iter():
+        if _local(stmt.tag) in ("Stmt", "Ntfctn"):
+            return _text(stmt, "Acct", "Id", "IBAN")
+    return None

@@ -1,0 +1,16 @@
+name: financial-lens-test
+services:
+  db:
+    image: postgres:17-alpine
+    environment: {POSTGRES_USER: fl, POSTGRES_PASSWORD: fl, POSTGRES_DB: fl}
+    tmpfs: [/var/lib/postgresql/data]
+    healthcheck: {test: ["CMD", "pg_isready", "-U", "fl"], interval: 2s, retries: 30}
+  test:
+    image: financial-lens-dev
+    depends_on: {db: {condition: service_healthy}}
+    working_dir: /app
+    volumes: [..:/app]
+    environment:
+      FL_TEST_DSN: "host=db user=fl password=fl dbname=fl"
+      PYTHONDONTWRITEBYTECODE: "1"
+    command: ["python", "-m", "pytest", "-q", "-p", "no:cacheprovider", "-x"]
