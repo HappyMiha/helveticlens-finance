@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="en-CH">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Financial Lens · Helvetic Lens</title>
+  <meta name="description" content="Evidence-first, offline-first finance for households, businesses and cooperatives. In development.">
+  <link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="assets/design-tokens.css">
+  <link rel="stylesheet" href="assets/site.css">
+</head>
+<body>
+  <a class="skip" href="#main" data-i18n="skip">Skip to content</a>
+  <header class="top">
+    <div class="wrap">
+      <a class="brand" href="./"><img src="assets/favicon.svg" alt=""> <span>Helvetic Lens <small>Financial Lens</small></span></a>
+      <label class="lang"><span class="skip" data-i18n="language">Language</span>
+        <select id="lang" aria-label="Language">
+          <option value="en-CH">English</option>
+          <option value="de-CH">Deutsch</option>
+          <option value="fr-CH">Français</option>
+          <option value="it-CH">Italiano</option>
+          <option value="rm">Rumantsch</option>
+        </select>
+      </label>
+    </div>
+  </header>
+
+  <main id="main">
+    <div class="wrap hero">
+      <p class="status" data-i18n="status">In development · Phase 1 MVP</p>
+      <p class="eyebrow" data-i18n="eyebrow">Financial intelligence</p>
+      <h1 data-i18n="title">See where the money went. Inspect why.</h1>
+      <p class="lead" data-i18n="lead">Financial Lens is a desktop application for household, business and cooperative finances. It reads receipts, invoices and bank statements, matches invoices with payments and keeps the original document behind every number.</p>
+      <div class="actions">
+        <a class="btn primary" href="#demo" data-i18n="ctaDemo">Explore the sample treemap</a>
+        <a class="btn" href="https://github.com/HappyMiha/helveticlens-finance" data-i18n="ctaCode">Source code</a>
+      </div>
+    </div>
+
+    <section aria-labelledby="h-how">
+      <div class="wrap">
+        <h2 id="h-how" data-i18n="howTitle">From document to verified record</h2>
+        <div class="grid">
+          <div class="card"><h3 data-i18n="s1t">Collect</h3><p data-i18n="s1">Photos, PDFs, CSV and XLSX, camt.053/054 statements, Swiss QR-bills or manual entries.</p></div>
+          <div class="card"><h3 data-i18n="s2t">Read</h3><p data-i18n="s2">OCR and field extraction propose amount, date, counterparty and category, each with its source location and confidence.</p></div>
+          <div class="card"><h3 data-i18n="s3t">Reconcile</h3><p data-i18n="s3">Invoices are matched with bank payments by QR reference, amount and date. Ambiguous cases are left for you to decide.</p></div>
+          <div class="card"><h3 data-i18n="s4t">Inspect</h3><p data-i18n="s4">A treemap shows where money went. Every area opens down to the record, its history and the original document.</p></div>
+        </div>
+      </div>
+    </section>
+
+    <section id="demo" aria-labelledby="h-demo">
+      <div class="wrap">
+        <h2 id="h-demo" data-i18n="demoTitle">Sample treemap</h2>
+        <p class="muted" data-i18n="demoNote">Illustrative sample data for one fictional household, October 2026. Select an area to drill down; select a record to see its evidence.</p>
+        <div class="demo">
+          <div>
+            <nav class="crumbs" id="crumbs" aria-label="Breadcrumb"></nav>
+            <div class="treemap" id="treemap" role="group" aria-label="Treemap"></div>
+            <p class="meta num" id="total"></p>
+          </div>
+          <aside class="card evidence" id="evidence" aria-live="polite">
+            <h3 data-i18n="evTitle">Evidence</h3>
+            <p class="muted" data-i18n="evEmpty">Select a record in the treemap to inspect where its numbers came from.</p>
+          </aside>
+        </div>
+      </div>
+    </section>
+
+    <section aria-labelledby="h-privacy">
+      <div class="wrap levels">
+        <h2 id="h-privacy" data-i18n="privTitle">You choose where your documents go</h2>
+        <div class="grid">
+          <div class="card"><h3 data-i18n="p1t">Local only</h3><p data-i18n="p1">OCR and language models run on your computer. No network connection is used.</p></div>
+          <div class="card"><h3 data-i18n="p2t">Swiss hosting</h3><p data-i18n="p2">Only AI providers hosted in Switzerland may process a document.</p></div>
+          <div class="card"><h3 data-i18n="p3t">Cloud AI</h3><p data-i18n="p3">You allow an external AI provider for better recognition, per document or per workspace.</p></div>
+        </div>
+        <p class="meta note" data-i18n="privNote">Totals are always calculated deterministically by the application, never by a language model.</p>
+      </div>
+    </section>
+
+    <section aria-labelledby="h-road">
+      <div class="wrap">
+        <h2 id="h-road" data-i18n="roadTitle">Phase 1 scope</h2>
+        <ol class="road">
+          <li data-i18n="r1">Upload a receipt, recognise it and create a categorised record with the original kept as evidence.</li>
+          <li data-i18n="r2">Import a camt.053 bank statement and match payments automatically, with the reason for each match.</li>
+          <li data-i18n="r3">Show spending on a treemap and drill down to the original document.</li>
+        </ol>
+        <p class="meta" data-i18n="roadNote">Not yet available: downloads, accounts and bank connections. This page will say when they are.</p>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <div class="wrap">
+      <span>© 2026 Helvetic Lens contributors · Apache-2.0</span>
+      <span><a href="https://helveticlens.ch/">helveticlens.ch</a></span>
+    </div>
+  </footer>
+  <script src="assets/site.js" defer></script>
+</body>
+</html>

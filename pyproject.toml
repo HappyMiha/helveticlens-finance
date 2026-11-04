@@ -1,0 +1,25 @@
+[project]
+name = "financial-lens"
+version = "0.1.0"
+description = "Evidence-first, offline-first finance for people, businesses and cooperatives."
+license = "Apache-2.0"
+requires-python = ">=3.12"
+dependencies = []
+
+[project.optional-dependencies]
+api = ["fastapi>=0.115", "uvicorn>=0.32", "python-multipart>=0.0.12"]
+db = ["psycopg[binary]>=3.2"]
+desktop = ["PySide6>=6.8"]
+ocr = ["paddleocr>=2.8"]
+dev = ["pytest>=8.3"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/financial_lens"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
