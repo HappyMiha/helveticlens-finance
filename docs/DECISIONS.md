@@ -9,3 +9,10 @@ Each entry: date · decision · reason.
 - 2026-11-05 · Design tokens and brand mark copied from helveticlens-pharma (`design-tokens.css`, `favicon.svg`), as the brand book requires repository tokens.
 - 2026-11-05 · Core domain is pure Python stdlib (Decimal, dataclasses) so it is testable without services; FastAPI, PostgreSQL, PySide6 and OCR are optional extras.
 - 2026-11-05 · Money is `Decimal` in minor-unit precision; floats are rejected at construction.
+- 2026-11-05 · Verification states (§7): **confirmed** = two independent agreeing sources (document + bank), a structured reference match, or a person; **needs review** = recognised but low confidence, conflicting, overpaid or a possible duplicate; **unconfirmed** = a single source (OCR-only, manual entry, bank debit without document).
+- 2026-11-05 · Spend is counted once (§18): recognised documents count; a bank debit counts only for the part no document explains; confirmed refunds net the original category; confirmed duplicates are excluded.
+- 2026-11-05 · Auto-confirmed links only for a QR/SCOR reference match, or exact amount + date window + clearly best counterparty match; everything else is proposed for a person (§4.5, §17.4).
+- 2026-11-05 · OCR engine: Tesseract (deu+fra+ita+eng) via its TSV output for per-line confidence; PaddleOCR can be added behind the same `recognise()` interface. QR-bills decoded with zbar override OCR guesses.
+- 2026-11-05 · Exchange rates are recorded with their source; an operation without a rate within 40 days is shown as unconverted, never estimated.
+- 2026-11-05 · The assistant (§11) parses questions with deterministic patterns (en/de/fr/uk); an optional model may only translate a question into a query, never produce a number.
+- 2026-11-05 · Desktop UI in PySide6 widgets talking to the service in-process; the FastAPI service exposes the same operations for other clients.

@@ -25,7 +25,7 @@ from .classify.rules import DEFAULT_TREE, classify
 from .domain.money import MINOR_UNITS
 from .extract import fields as fx
 from .extract import ocr
-from .ingest import camt053
+from .ingest import camt053, tabular
 from .store.files import OriginalStore
 
 BASE = "CHF"
@@ -205,6 +205,10 @@ class FinancialLens:
         if merged.get("period") is None and merged.get("op_date"):
             merged["period"] = merged["op_date"].strftime("%Y-%m")
         cur = merged["currency"]
+        if cur != BASE and merged.get("fx_rate") is None and merged.get("op_date"):
+            found = self.fx_rate(cur, merged["op_date"])
+            if found:
+                merged["fx_rate"], merged["fx_source"] = found
         if cur not in MINOR_UNITS:
             raise ValueError(f"Unsupported currency {cur}")
         amount = Decimal(merged["amount"])
@@ -301,6 +305,10 @@ class FinancialLens:
         try:
             if media_type in ("application/xml", "text/xml") and b"camt.05" in data[:2000]:
                 result = self._import_camt(doc, data)
+            elif media_type in ("text/csv", "application/vnd.ms-excel") or filename.lower().endswith(".csv"):
+                result = self._import_table(doc, tabular.rows_from_csv(data), "csv")
+            elif media_type.endswith("spreadsheetml.sheet") or filename.lower().endswith(".xlsx"):
+                result = self._import_table(doc, tabular.rows_from_xlsx(data), "xlsx")
             else:
                 result = self._process_document(doc, data, media_type)
         except Exception as exc:
@@ -381,6 +389,7 @@ class FinancialLens:
                     "confidence": Decimal(str(round(weakest if not structured else 1.0, 3))), "provenance": prov,
                 }, change_reason="recognised from document")
                 self.db.execute("INSERT INTO document_operations VALUES (%s,%s,'source')", (doc, op))
+                self._find_duplicates(op)
                 op_ids.append(op)
                 folder = self._folder(doc_type, op_date, sug.path, unpaid=kind == "invoice")
                 status = "needs_review" if verification == "needs_review" else "processed"
@@ -404,14 +413,21 @@ class FinancialLens:
                         (aid, self.org, f"Account {iban[-4:]}", iban, currency))
         return aid
 
+    def _import_table(self, doc: str, rows: list, engine: str) -> IngestResult:
+        payments, problems = tabular.parse(rows, doc, BASE, engine)
+        result = self._import_payments(doc, payments, None, engine)
+        result.messages.extend(problems)
+        return result
+
     def _import_camt(self, doc: str, data: bytes) -> IngestResult:
-        payments = camt053.parse(data, doc)
-        iban = camt053.account_iban(data)
+        return self._import_payments(doc, camt053.parse(data, doc), camt053.account_iban(data), "camt-parser")
+
+    def _import_payments(self, doc: str, payments: list, iban: Optional[str], engine: str) -> IngestResult:
         op_ids, skipped = [], 0
         with self.db.transaction():
             account = self._account(iban, payments[0].amount.currency if payments else BASE)
             self.db.execute("INSERT INTO extractions (id, document_id, engine, fields) VALUES (%s,%s,%s,%s)",
-                            (_uuid(), doc, "camt-parser", Jsonb({"entries": len(payments), "iban": iban})))
+                            (_uuid(), doc, engine, Jsonb({"entries": len(payments), "iban": iban})))
             for p in payments:
                 if p.bank_reference and self.db.execute(
                         "SELECT 1 FROM operations_current WHERE organization_id=%s AND kind='payment' AND bank_reference=%s",
@@ -456,101 +472,280 @@ class FinancialLens:
         return any(iban in text.upper().replace(" ", "") for iban in own_ibans)
 
     # ---------------------------------------------------------- reconcile
-    def reconcile(self, window_days: int = 45) -> list[dict]:
-        """Link recognised expenses to bank payments. Strong evidence is linked and
-        confirmed with its reasons recorded; weaker evidence is only proposed."""
+    REFUND_WORDS = ("gutschrift", "rückerstattung", "rueckerstattung", "refund", "remboursement", "rimborso",
+                    "storno", "retoure", "rückzahlung")
+
+    def _open_items(self) -> tuple[list[dict], list[dict], list[dict]]:
+        """Spend records with an open amount, outgoing and incoming payments with an unallocated amount."""
         cur = self.db.execute
-        expenses = cur("SELECT * FROM operations_current c WHERE organization_id=%s AND kind = ANY(%s) "
-                       "AND NOT EXISTS (SELECT 1 FROM links l WHERE l.from_operation_id=c.operation_id "
-                       "AND l.status <> 'rejected' AND l.link_type='payment')",
-                       (self.org, list(SPEND_KINDS))).fetchall()
-        payments = cur("SELECT * FROM operations_current c WHERE organization_id=%s AND kind='payment' AND amount < 0 "
-                       "AND NOT EXISTS (SELECT 1 FROM links l WHERE l.to_operation_id=c.operation_id "
-                       "AND l.status <> 'rejected' AND l.link_type='payment')", (self.org,)).fetchall()
-        rejected = {(str(r["from_operation_id"]), str(r["to_operation_id"])) for r in cur(
+        expenses = cur(
+            "SELECT c.*, c.amount - coalesce((SELECT sum(l.amount) FROM links l WHERE l.from_operation_id=c.operation_id "
+            "AND l.status <> 'rejected' AND l.link_type='payment'), 0) AS open_amount "
+            "FROM operations_current c WHERE organization_id=%s AND kind = ANY(%s) AND NOT EXISTS ("
+            "SELECT 1 FROM links d WHERE d.from_operation_id=c.operation_id AND d.link_type='duplicate' AND d.status='confirmed')",
+            (self.org, list(SPEND_KINDS))).fetchall()
+        payments = cur(
+            "SELECT c.*, -c.amount - coalesce((SELECT sum(l.amount) FROM links l WHERE l.to_operation_id=c.operation_id "
+            "AND l.status <> 'rejected' AND l.link_type='payment'), 0) AS remaining, "
+            "(SELECT count(*) FROM links l WHERE l.to_operation_id=c.operation_id AND l.status <> 'rejected') AS n_links "
+            "FROM operations_current c WHERE organization_id=%s AND kind='payment' AND amount < 0", (self.org,)).fetchall()
+        incoming = cur(
+            "SELECT c.* FROM operations_current c WHERE organization_id=%s AND kind='payment' AND amount > 0 "
+            "AND NOT EXISTS (SELECT 1 FROM links l WHERE l.to_operation_id=c.operation_id AND l.status <> 'rejected')",
+            (self.org,)).fetchall()
+        return ([e for e in expenses if e["open_amount"] > 0], [p for p in payments if p["remaining"] > 0], incoming)
+
+    def _link(self, e: dict, p: dict, link_type: str, amount: Decimal, rule: str, reasons: list[str],
+              status: str) -> dict:
+        lid = _uuid()
+        eid, pid = str(e["operation_id"]), str(p["operation_id"])
+        self.db.execute(
+            "INSERT INTO links (id, organization_id, from_operation_id, to_operation_id, link_type, amount, currency, "
+            "rule, reasons, status, created_by, decided_by, decided_at) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,"
+            "'engine:reconcile',%s, CASE WHEN %s='confirmed' THEN now() END) "
+            "ON CONFLICT (from_operation_id, to_operation_id, link_type) DO NOTHING",
+            (lid, self.org, eid, pid, link_type, amount, e["currency"], rule, Jsonb(reasons), status,
+             "engine:reconcile" if status == "confirmed" else None, status))
+        self._ai_log("match", "engine:reconcile", "local",
+                     f"{'Linked' if status == 'confirmed' else 'Proposed'} {link_type} for {e['counterparty'] or eid}",
+                     {"rule": rule, "reasons": reasons, "amount": str(amount)}, operation_id=eid)
+        self._audit("link_" + status, "link", lid, {"from": eid, "to": pid, "rule": rule, "type": link_type},
+                    actor="engine:reconcile")
+        return {"id": lid, "from": eid, "to": pid, "type": link_type, "rule": rule, "status": status,
+                "amount": str(amount), "reasons": reasons}
+
+    def reconcile(self, window_days: int = 45) -> list[dict]:
+        """Link spend records to bank payments (§4.5). Many-to-many: split and partial
+        payments, overpayments and refunds. Strong evidence is linked and confirmed
+        with its reasons recorded; weaker evidence is only proposed."""
+        expenses, payments, incoming = self._open_items()
+        rejected = {(str(r["from_operation_id"]), str(r["to_operation_id"])) for r in self.db.execute(
             "SELECT from_operation_id, to_operation_id FROM links WHERE organization_id=%s AND status='rejected'",
             (self.org,)).fetchall()}
-        used: set[str] = set()
-        created = []
+        remaining = {str(p["operation_id"]): p["remaining"] for p in payments}
+        created: list[dict] = []
+        touched: set[str] = set()
         with self.db.transaction():
-            for e in sorted(expenses, key=lambda r: (r["reference"] is None, r["op_date"])):
+            # Pass A: structured reference. Allocate payments to the open amount, in date order.
+            for e in sorted((e for e in expenses if e["reference"]), key=lambda r: r["op_date"]):
+                eid = str(e["operation_id"])
+                open_amount = e["open_amount"]
+                for p in sorted((p for p in payments if p["reference"] == e["reference"]
+                                 and p["currency"] == e["currency"]), key=lambda r: r["op_date"]):
+                    pid = str(p["operation_id"])
+                    if open_amount <= 0 or remaining[pid] <= 0 or (eid, pid) in rejected:
+                        continue
+                    part = min(open_amount, remaining[pid])
+                    reasons = [f"Reference {e['reference']} is on the document and on the bank payment"]
+                    if part < e["open_amount"] or part < remaining[pid]:
+                        reasons.append(f"Allocates {e['currency']} {part:.2f} of {e['currency']} {e['amount']:.2f}")
+                    if remaining[pid] > open_amount:
+                        reasons.append(f"Payment exceeds the open amount by {e['currency']} {remaining[pid] - open_amount:.2f}")
+                    created.append(self._link(e, p, "payment", part, "qr_reference", reasons, "confirmed"))
+                    open_amount -= part
+                    remaining[pid] -= part
+                    touched.add(eid)
+                e["open_amount"] = open_amount
+
+            # Pass B: exact amount within the date window, counterparty as evidence.
+            used = {pid for pid, rest in remaining.items() if rest <= 0}
+            for e in sorted((e for e in expenses if e["open_amount"] == e["amount"] and str(e["operation_id"]) not in touched),
+                            key=lambda r: r["op_date"]):
                 eid = str(e["operation_id"])
                 start = e["op_date"] - timedelta(days=3)
                 end = (e["due_date"] or e["op_date"]) + timedelta(days=window_days)
-                cands = [p for p in payments if str(p["operation_id"]) not in used
-                         and (eid, str(p["operation_id"])) not in rejected
-                         and p["currency"] == e["currency"] and -p["amount"] == e["amount"]]
-                by_ref = [p for p in cands if e["reference"] and p["reference"] == e["reference"]]
-                if by_ref:
-                    p, rule, status = by_ref[0], "qr_reference", "confirmed"
-                    reasons = [f"Reference {e['reference']} is on the document and on the bank payment",
-                               f"Amount {e['currency']} {e['amount']:.2f} matches exactly"]
+                cands = [p for p in payments if str(p["operation_id"]) not in used and p["n_links"] == 0
+                         and (eid, str(p["operation_id"])) not in rejected and p["currency"] == e["currency"]
+                         and remaining[str(p["operation_id"])] == e["amount"] and start <= p["op_date"] <= end]
+                if not cands:
+                    continue
+                scored = sorted(((_similar(p["counterparty"], e["counterparty"]), p) for p in cands),
+                                key=lambda t: (-t[0], abs((t[1]["op_date"] - e["op_date"]).days)))
+                best, p = scored[0]
+                second = scored[1][0] if len(scored) > 1 else -1
+                reasons = [f"Amount {e['currency']} {e['amount']:.2f} matches exactly",
+                           f"Booked {p['op_date']:%d.%m.%Y}, within {start:%d.%m.%Y}–{end:%d.%m.%Y}"]
+                if best >= 0.6:
+                    reasons.append(f"Counterparty “{p['counterparty']}” matches “{e['counterparty']}”")
+                if best >= 0.6 and best > second:
+                    rule, status = "amount_date_counterparty", "confirmed"
+                elif len(cands) == 1:
+                    rule, status = "amount_date", "proposed"
+                    reasons.append("Counterparty names differ; please confirm")
                 else:
-                    in_window = [p for p in cands if start <= p["op_date"] <= end]
-                    if not in_window:
-                        continue
-                    scored = sorted(((_similar(p["counterparty"], e["counterparty"]), p) for p in in_window),
-                                    key=lambda t: (-t[0], abs((t[1]["op_date"] - e["op_date"]).days)))
-                    best_score, p = scored[0]
-                    second = scored[1][0] if len(scored) > 1 else -1
-                    reasons = [f"Amount {e['currency']} {e['amount']:.2f} matches exactly",
-                               f"Booked {p['op_date']:%d.%m.%Y}, within {start:%d.%m.%Y}–{end:%d.%m.%Y}"]
-                    if best_score >= 0.6:
-                        reasons.append(f"Counterparty “{p['counterparty']}” matches “{e['counterparty']}”")
-                    if best_score >= 0.6 and best_score > second:
-                        rule, status = "amount_date_counterparty", "confirmed"
-                    elif len(in_window) == 1:
-                        rule, status = "amount_date", "proposed"
-                        reasons.append("Counterparty names differ; please confirm")
-                    else:
-                        rule, status = "amount_date_ambiguous", "proposed"
-                        reasons.append(f"{len(in_window)} payments fit; this is the closest in date")
+                    rule, status = "amount_date_ambiguous", "proposed"
+                    reasons.append(f"{len(cands)} payments fit; this is the closest in date")
                 pid = str(p["operation_id"])
                 used.add(pid)
-                lid = _uuid()
-                cur("INSERT INTO links (id, organization_id, from_operation_id, to_operation_id, link_type, amount, "
-                    "currency, rule, reasons, status, created_by, decided_by, decided_at) "
-                    "VALUES (%s,%s,%s,%s,'payment',%s,%s,%s,%s,%s,'engine:reconcile',%s,"
-                    "CASE WHEN %s='confirmed' THEN now() END)",
-                    (lid, self.org, eid, pid, e["amount"], e["currency"], rule, Jsonb(reasons), status,
-                     "engine:reconcile" if status == "confirmed" else None, status))
-                self._ai_log("match", "engine:reconcile", "local",
-                             f"{'Linked' if status == 'confirmed' else 'Proposed'} payment for {e['counterparty'] or eid}",
-                             {"rule": rule, "reasons": reasons}, operation_id=eid)
-                self._audit("link_" + status, "link", lid, {"from": eid, "to": pid, "rule": rule}, actor="engine:reconcile")
-                if status == "confirmed":
-                    self._confirm_pair(e, p, rule)
-                created.append({"id": lid, "from": eid, "to": pid, "rule": rule, "status": status, "reasons": reasons})
+                remaining[pid] = Decimal(0)
+                e["open_amount"] = Decimal(0)
+                created.append(self._link(e, p, "payment", e["amount"], rule, reasons, status))
+                touched.add(eid)
+
+            # Pass C: refunds — incoming money from a counterparty we paid, marked as a refund.
+            spent = [e for e in self.db.execute(
+                "SELECT * FROM operations_current WHERE organization_id=%s AND (kind = ANY(%s) OR "
+                "(kind='payment' AND amount < 0))", (self.org, list(SPEND_KINDS))).fetchall()]
+            for r in incoming:
+                text = (r["counterparty"] + " " + r["description"]).casefold()
+                if not any(w in text for w in self.REFUND_WORDS):
+                    continue
+                cands = [e for e in spent if e["currency"] == r["currency"] and abs(e["amount"]) >= r["amount"]
+                         and timedelta(0) <= r["op_date"] - e["op_date"] <= timedelta(days=180)
+                         and _similar(e["counterparty"], r["counterparty"]) >= 0.6]
+                if not cands:
+                    continue
+                e = sorted(cands, key=lambda c: (abs(c["amount"]) != r["amount"], r["op_date"] - c["op_date"]))[0]
+                reasons = [f"Incoming {r['currency']} {r['amount']:.2f} is marked as a refund",
+                           f"Counterparty “{r['counterparty']}” matches the original “{e['counterparty']}”"]
+                created.append(self._link(e, r, "refund", r["amount"], "refund_counterparty", reasons, "proposed"))
+
+            # Pass D: payslips to incoming salary payments.
+            for s in self.db.execute(
+                    "SELECT * FROM operations_current c WHERE organization_id=%s AND kind='payslip' AND NOT EXISTS ("
+                    "SELECT 1 FROM links l WHERE l.from_operation_id=c.operation_id AND l.status <> 'rejected')",
+                    (self.org,)).fetchall():
+                cands = [r for r in incoming if r["currency"] == s["currency"] and r["amount"] == s["amount"]
+                         and abs((r["op_date"] - s["op_date"]).days) <= 15]
+                if len(cands) == 1:
+                    r = cands[0]
+                    reasons = [f"Net pay {s['currency']} {s['amount']:.2f} equals the incoming payment",
+                               f"Booked {r['op_date']:%d.%m.%Y}"]
+                    good = _similar(r["counterparty"], s["counterparty"]) >= 0.6
+                    if good:
+                        reasons.append(f"Employer “{r['counterparty']}” matches")
+                    created.append(self._link(s, r, "payment", s["amount"], "payslip_amount_date",
+                                              reasons, "confirmed" if good else "proposed"))
+                    incoming.remove(r)
+                    if good:
+                        for op_id in (str(s["operation_id"]), str(r["operation_id"])):
+                            self._revision(op_id, {"verification": "confirmed", "agent": "engine:reconcile",
+                                                   "verification_reason": "Payslip and bank credit agree"},
+                                           "linked payslip and salary")
+
+            for e in expenses:
+                if str(e["operation_id"]) in touched:
+                    self._settle(str(e["operation_id"]))
         return created
 
-    def _confirm_pair(self, e: dict, p: dict, rule: str) -> None:
-        eid, pid = str(e["operation_id"]), str(p["operation_id"])
-        if e["verification"] != "needs_review":
-            self._revision(eid, {"verification": "confirmed", "agent": "engine:reconcile",
-                                 "verification_reason": "Document and bank payment agree (" + rule + ")"},
-                           "linked to bank payment")
-        self._revision(pid, {"verification": "confirmed" if e["verification"] != "needs_review" else "needs_review",
-                             "category_id": e["category_id"], "agent": "engine:reconcile",
-                             "verification_reason": "Payment matches a recorded document (" + rule + ")"},
-                       "linked to document")
-        self.db.execute("INSERT INTO document_operations SELECT document_id, %s, 'attachment' FROM document_operations "
-                        "WHERE operation_id=%s AND role='source' ON CONFLICT DO NOTHING", (pid, eid))
+    def payment_status(self, op: str) -> dict:
+        row = self.db.execute(
+            "SELECT c.amount, c.currency, c.due_date, c.kind, coalesce(sum(l.amount) FILTER (WHERE l.status='confirmed'),0) AS paid, "
+            "coalesce(sum(l.amount) FILTER (WHERE l.status='proposed'),0) AS proposed, "
+            "coalesce((SELECT sum(-p.amount) FROM operations_current p JOIN links x ON x.to_operation_id=p.operation_id "
+            "  WHERE x.from_operation_id=c.operation_id AND x.status='confirmed' AND x.link_type='payment'),0) AS paid_gross "
+            "FROM operations_current c LEFT JOIN links l ON l.from_operation_id=c.operation_id AND l.link_type='payment' "
+            "WHERE c.operation_id=%s GROUP BY c.amount, c.currency, c.due_date, c.kind, c.operation_id", (op,)).fetchone()
+        amount, paid = row["amount"], row["paid"]
+        if paid >= amount:
+            state = "overpaid" if row["paid_gross"] > amount and self._single_target(op) else "paid"
+        elif paid > 0:
+            state = "partially_paid"
+        else:
+            state = "unpaid"
+        overdue = state in ("unpaid", "partially_paid") and row["due_date"] is not None and row["due_date"] < date.today()
+        q = Decimal("0.01")
+        return {"state": state, "paid": str(paid.quantize(q)), "open": str(max(amount - paid, Decimal(0)).quantize(q)),
+                "proposed": str(row["proposed"].quantize(q)), "overdue": overdue, "currency": row["currency"]}
+
+    def _single_target(self, op: str) -> bool:
+        """True when every payment linked to op pays only op (so any surplus is an overpayment of op)."""
+        return self.db.execute(
+            "SELECT bool_and(n = 1) AS ok FROM (SELECT count(*) n FROM links WHERE to_operation_id IN ("
+            "SELECT to_operation_id FROM links WHERE from_operation_id=%s AND link_type='payment' AND status='confirmed') "
+            "AND status <> 'rejected' GROUP BY to_operation_id) t", (op,)).fetchone()["ok"] or False
+
+    def _settle(self, eid: str) -> None:
+        """Update verification after links change. Confirmed only when fully covered by confirmed links."""
+        e = self.db.execute("SELECT * FROM operations_current WHERE operation_id=%s", (eid,)).fetchone()
+        st = self.payment_status(eid)
+        links = self.db.execute("SELECT l.*, p.verification AS p_verification FROM links l JOIN operations_current p "
+                                "ON p.operation_id=l.to_operation_id WHERE l.from_operation_id=%s AND l.status='confirmed' "
+                                "AND l.link_type='payment'", (eid,)).fetchall()
+        if st["state"] in ("paid", "overpaid"):
+            rules = ", ".join(sorted({l["rule"] for l in links}))
+            if e["verification"] == "needs_review":
+                pass  # a person must resolve the doubt first (§17.4)
+            elif st["state"] == "overpaid":
+                self._revision(eid, {"verification": "needs_review", "agent": "engine:reconcile",
+                                     "verification_reason": f"Paid more than invoiced ({rules}); check for a refund or credit"},
+                               "overpayment detected")
+            elif e["verification"] != "confirmed":
+                self._revision(eid, {"verification": "confirmed", "agent": "engine:reconcile",
+                                     "verification_reason": f"Document and bank payment agree ({rules})"},
+                               "linked to bank payment")
+            for l in links:
+                if l["p_verification"] != "confirmed":
+                    self._revision(str(l["to_operation_id"]), {
+                        "verification": "confirmed" if e["verification"] != "needs_review" else "needs_review",
+                        "category_id": e["category_id"], "agent": "engine:reconcile",
+                        "verification_reason": f"Payment matches a recorded document ({l['rule']})"},
+                        "linked to document")
+                self.db.execute("INSERT INTO document_operations SELECT document_id, %s, 'attachment' FROM "
+                                "document_operations WHERE operation_id=%s AND role='source' ON CONFLICT DO NOTHING",
+                                (str(l["to_operation_id"]), eid))
+        elif st["state"] == "partially_paid" and "Partially paid" not in e["verification_reason"]:
+            self._revision(eid, {"agent": "engine:reconcile",
+                                 "verification_reason": f"Partially paid: {st['currency']} {st['paid']} of {e['amount']:.2f}"},
+                           "partial payment linked")
 
     def decide_link(self, link_id: str, accept: bool, actor: Optional[str] = None) -> None:
         actor = actor or self.actor
         with self.db.transaction():
-            link = self.db.execute("SELECT * FROM links WHERE id=%s", (link_id,)).fetchone()
+            link = self.db.execute("SELECT * FROM links WHERE id=%s AND organization_id=%s", (link_id, self.org)).fetchone()
             self.db.execute("UPDATE links SET status=%s, decided_by=%s, decided_at=now() WHERE id=%s",
                             ("confirmed" if accept else "rejected", actor, link_id))
             self._audit("link_confirmed" if accept else "link_rejected", "link", link_id, {}, actor=actor)
-            if accept:
-                e = self.db.execute("SELECT * FROM operations_current WHERE operation_id=%s",
-                                    (link["from_operation_id"],)).fetchone()
-                p = self.db.execute("SELECT * FROM operations_current WHERE operation_id=%s",
-                                    (link["to_operation_id"],)).fetchone()
-                self._confirm_pair(e, p, link["rule"] + f", confirmed by {actor}")
+            if link["link_type"] == "payment":
+                self._settle(str(link["from_operation_id"]))
+            elif link["link_type"] == "duplicate" and accept:
+                self._revision(str(link["from_operation_id"]), {
+                    "agent": actor, "verification": "needs_review",
+                    "verification_reason": "Duplicate of another record; excluded from totals"}, "marked as duplicate")
+            elif link["link_type"] == "duplicate":
+                self._revision(str(link["from_operation_id"]), {
+                    "agent": actor, "verification": "unconfirmed",
+                    "verification_reason": f"Not a duplicate (decided by {actor})"}, "duplicate rejected")
         if not accept:
             self.reconcile()
+
+    # ------------------------------------------------------------- duplicates
+    def _find_duplicates(self, op: str) -> None:
+        """Same amount, date and counterparty from a different document: propose, never drop (§3)."""
+        e = self.db.execute("SELECT * FROM operations_current WHERE operation_id=%s", (op,)).fetchone()
+        others = self.db.execute(
+            "SELECT * FROM operations_current WHERE organization_id=%s AND operation_id <> %s AND kind = ANY(%s) "
+            "AND amount=%s AND currency=%s AND op_date BETWEEN %s AND %s AND "
+            "NOT (source_document_id IS NOT NULL AND source_document_id = %s)",
+            (self.org, op, list(SPEND_KINDS), e["amount"], e["currency"], e["op_date"] - timedelta(days=2),
+             e["op_date"] + timedelta(days=2), e["source_document_id"])).fetchall()
+        for o in others:
+            if _similar(o["counterparty"], e["counterparty"]) < 0.75:
+                continue
+            reasons = [f"Same amount {e['currency']} {e['amount']:.2f}",
+                       f"Dates {o['op_date']:%d.%m.%Y} and {e['op_date']:%d.%m.%Y}",
+                       f"Counterparty “{o['counterparty']}” ≈ “{e['counterparty']}”"]
+            self._link(e, o, "duplicate", e["amount"], "same_amount_date_counterparty", reasons, "proposed")
+            self._revision(op, {"verification": "needs_review", "agent": "engine:duplicates",
+                                "verification_reason": "Possible duplicate of an earlier record"}, "possible duplicate")
+            break
+
+    # --------------------------------------------------------------- FX
+    def set_fx_rate(self, currency: str, rate_date: date, rate_to_base: str, source: str) -> None:
+        with self.db.transaction():
+            self.db.execute("INSERT INTO fx_rates (currency, rate_date, rate_to_base, base, source, recorded_by) "
+                            "VALUES (%s,%s,%s,%s,%s,%s) ON CONFLICT DO NOTHING",
+                            (currency, rate_date, Decimal(rate_to_base), BASE, source, self.actor))
+            self._audit("fx_rate", "fx_rate", f"{currency}:{rate_date}", {"rate": rate_to_base, "source": source})
+
+    def fx_rate(self, currency: str, on: date) -> Optional[tuple[Decimal, str]]:
+        if currency == BASE:
+            return Decimal(1), "base currency"
+        row = self.db.execute("SELECT rate_to_base, source, rate_date FROM fx_rates WHERE currency=%s AND base=%s "
+                              "AND rate_date <= %s ORDER BY rate_date DESC LIMIT 1", (currency, BASE, on)).fetchone()
+        if not row or (on - row["rate_date"]).days > 40:
+            return None  # no rate close enough: shown as unconverted, never guessed
+        return row["rate_to_base"], f"{row['source']} ({row['rate_date']:%d.%m.%Y})"
 
     def tag(self, op: str, name: str) -> None:
         with self.db.transaction():
@@ -573,31 +768,47 @@ class FinancialLens:
 
     # ---------------------------------------------------------------- views
     def _spend_rows(self, start: date, end: date) -> list[dict]:
-        """Expenses counted once (§18): recognised documents, plus bank debits that
-        no document explains. A payment linked to a document is not counted again."""
-        return self.db.execute(
+        """Expenses counted once (§18): recognised documents, plus the part of bank
+        debits that no document explains, minus confirmed refunds. Confirmed
+        duplicates are excluded."""
+        rows = self.db.execute(
             "SELECT c.*, (SELECT count(*) FROM links l WHERE l.status='proposed' AND "
-            "(l.from_operation_id=c.operation_id OR l.to_operation_id=c.operation_id)) AS proposed_links "
+            "(l.from_operation_id=c.operation_id OR l.to_operation_id=c.operation_id)) AS proposed_links, "
+            "CASE WHEN c.kind='payment' THEN -c.amount - coalesce((SELECT sum(l.amount) FROM links l WHERE "
+            "l.to_operation_id=c.operation_id AND l.status <> 'rejected' AND l.link_type='payment'),0) "
+            "ELSE c.amount END AS counted "
             "FROM operations_current c WHERE c.organization_id=%s AND c.op_date BETWEEN %s AND %s AND ("
-            " c.kind = ANY(%s) OR (c.kind='payment' AND c.amount < 0 AND NOT EXISTS ("
-            "   SELECT 1 FROM links l WHERE l.to_operation_id=c.operation_id AND l.status <> 'rejected'"
-            "   AND l.link_type='payment')))", (self.org, start, end, list(SPEND_KINDS))).fetchall()
+            " (c.kind = ANY(%s) AND NOT EXISTS (SELECT 1 FROM links d WHERE d.from_operation_id=c.operation_id "
+            "   AND d.link_type='duplicate' AND d.status='confirmed')) OR (c.kind='payment' AND c.amount < 0))",
+            (self.org, start, end, list(SPEND_KINDS))).fetchall()
+        refunds = self.db.execute(
+            "SELECT r.*, 0 AS proposed_links, -l.amount AS counted, e.category_id AS category_id "
+            "FROM links l JOIN operations_current r ON r.operation_id=l.to_operation_id "
+            "JOIN operations_current e ON e.operation_id=l.from_operation_id "
+            "WHERE l.organization_id=%s AND l.link_type='refund' AND l.status='confirmed' AND r.op_date BETWEEN %s AND %s",
+            (self.org, start, end)).fetchall()
+        return [r for r in rows if r["counted"] > 0] + list(refunds)
 
     def _income_rows(self, start: date, end: date) -> list[dict]:
         return self.db.execute(
-            "SELECT c.*, 0 AS proposed_links FROM operations_current c WHERE c.organization_id=%s "
+            "SELECT c.*, 0 AS proposed_links, c.amount AS counted FROM operations_current c WHERE c.organization_id=%s "
             "AND c.op_date BETWEEN %s AND %s AND (c.kind = ANY(%s) OR (c.kind='payment' AND c.amount > 0 "
-            "AND NOT EXISTS (SELECT 1 FROM links l WHERE l.to_operation_id=c.operation_id AND l.status <> 'rejected')))",
+            "AND NOT EXISTS (SELECT 1 FROM links l WHERE l.to_operation_id=c.operation_id AND l.status='confirmed')))",
             (self.org, start, end, list(INCOME_KINDS))).fetchall()
 
-    @staticmethod
-    def _in_base(row: dict) -> Optional[Decimal]:
-        amount = abs(row["amount"])
+    def _in_base(self, row: dict) -> Optional[Decimal]:
+        """Counted amount in CHF (signed: refunds are negative). Uses the recorded rate,
+        or the closest recorded rate; never an invented one."""
+        amount = row["counted"] if "counted" in row else abs(row["amount"])
         if row["currency"] == BASE:
-            return amount.quantize(Decimal("0.01"))
-        if row["fx_rate"]:
-            return (amount * row["fx_rate"]).quantize(Decimal("0.01"))
-        return None
+            return Decimal(amount).quantize(Decimal("0.01"))
+        rate = row["fx_rate"]
+        if rate is None:
+            found = self.fx_rate(row["currency"], row["op_date"])
+            rate = found[0] if found else None
+        if rate is None:
+            return None
+        return (Decimal(amount) * rate).quantize(Decimal("0.01"))
 
     def treemap(self, start: date, end: date, mode: str = "expenses") -> dict:
         rows = self._spend_rows(start, end) if mode == "expenses" else self._income_rows(start, end)

@@ -163,3 +163,61 @@ def add_rule(body: Rule, fl: FinancialLens = Depends(lens)) -> dict:
 @app.get("/ai-activity")
 def ai_activity(fl: FinancialLens = Depends(lens)) -> list[dict]:
     return fl.ai_activity()
+
+
+# ---------------------------------------------------------------- Phase 2
+from .. import analytics as _an  # noqa: E402
+from .. import assistant as _as  # noqa: E402
+
+
+@app.get("/analytics/cash-flow")
+def cash_flow(start: Optional[date] = None, end: Optional[date] = None, fl: FinancialLens = Depends(lens)) -> list[dict]:
+    return _an.cash_flow(fl, *_period(start, end))
+
+
+@app.get("/analytics/compare")
+def compare(a_start: date, a_end: date, b_start: date, b_end: date, depth: int = 1,
+            fl: FinancialLens = Depends(lens)) -> list[dict]:
+    return _an.compare(fl, (a_start, a_end), (b_start, b_end), depth)
+
+
+@app.get("/analytics/counterparties")
+def counterparties(start: Optional[date] = None, end: Optional[date] = None, fl: FinancialLens = Depends(lens)) -> list[dict]:
+    return _an.by_counterparty(fl, *_period(start, end))
+
+
+@app.get("/analytics/top")
+def top(start: Optional[date] = None, end: Optional[date] = None, fl: FinancialLens = Depends(lens)) -> list[dict]:
+    return _an.top_expenses(fl, *_period(start, end))
+
+
+@app.get("/recurring")
+def recurring(fl: FinancialLens = Depends(lens)) -> dict:
+    return {"detected": _an.save_recurring(fl), "missing": _an.missing_recurring(fl)}
+
+
+@app.get("/unpaid")
+def unpaid_invoices(fl: FinancialLens = Depends(lens)) -> list[dict]:
+    return _an.unpaid(fl)
+
+
+class Question(BaseModel):
+    question: str
+
+
+@app.post("/ask")
+def ask(body: Question, fl: FinancialLens = Depends(lens)) -> dict:
+    return _as.ask(fl, body.question)
+
+
+class Rate(BaseModel):
+    currency: str
+    rate_date: date
+    rate_to_chf: str
+    source: str
+
+
+@app.post("/fx-rates")
+def fx_rate(body: Rate, fl: FinancialLens = Depends(lens)) -> dict:
+    fl.set_fx_rate(body.currency.upper(), body.rate_date, body.rate_to_chf, body.source)
+    return {"status": "ok"}

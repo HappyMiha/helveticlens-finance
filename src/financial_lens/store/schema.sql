@@ -221,4 +221,33 @@ BEGIN
   END LOOP;
 END $$;
 
-INSERT INTO schema_version (version) VALUES (1) ON CONFLICT DO NOTHING;
+
+-- v2: Phase 2 — exchange rates and recurring rules.
+CREATE TABLE IF NOT EXISTS fx_rates (
+  currency char(3) NOT NULL,
+  rate_date date NOT NULL,
+  rate_to_base numeric(20,10) NOT NULL CHECK (rate_to_base > 0),  -- 1 unit of currency in base currency
+  base char(3) NOT NULL DEFAULT 'CHF',
+  source text NOT NULL,                -- e.g. "SNB monthly average", "bank statement", "user"
+  recorded_by text NOT NULL,
+  recorded_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (currency, rate_date, base, source)
+);
+
+CREATE TABLE IF NOT EXISTS recurring_rules (
+  id uuid PRIMARY KEY,
+  organization_id uuid NOT NULL REFERENCES organizations(id),
+  counterparty text NOT NULL,
+  cadence text NOT NULL CHECK (cadence IN ('weekly','monthly','quarterly','yearly')),
+  typical_amount numeric(20,4) NOT NULL,
+  currency char(3) NOT NULL,
+  category_id uuid REFERENCES categories(id),
+  last_date date NOT NULL,
+  next_expected date NOT NULL,
+  occurrences int NOT NULL,
+  status text NOT NULL CHECK (status IN ('proposed','confirmed','dismissed')),
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (organization_id, counterparty, cadence)
+);
+
+INSERT INTO schema_version (version) VALUES (1), (2) ON CONFLICT DO NOTHING;

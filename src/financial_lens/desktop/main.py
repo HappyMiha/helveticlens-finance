@@ -25,6 +25,7 @@ from PySide6.QtWidgets import (
     QTableWidgetItem, QTextBrowser, QVBoxLayout, QWidget,
 )
 
+from .. import analytics, assistant
 from ..service import FinancialLens
 from ..views.layout import squarify
 
@@ -226,7 +227,7 @@ class MainWindow(QMainWindow):
         self.nav = QListWidget()
         self.nav.setObjectName("nav")
         self.nav.setFixedWidth(190)
-        self.nav.addItems(["Overview", "Inbox", "Documents", "Transactions", "AI Activity"])
+        self.nav.addItems(["Overview", "Inbox", "Documents", "Transactions", "Analytics", "Ask", "AI Activity"])
         outer.addWidget(self.nav)
         self.stack = QStackedWidget()
         outer.addWidget(self.stack, 1)
@@ -266,6 +267,8 @@ class MainWindow(QMainWindow):
         self.stack.addWidget(self.docs)
         self.txs = table(["Date", "Kind", "Counterparty", "Category", "Amount", "Status"])
         self.stack.addWidget(self.txs)
+        self.stack.addWidget(self._analytics())
+        self.stack.addWidget(self._ask())
         self.ai = table(["When", "Task", "Provider", "Where", "Summary"])
         self.stack.addWidget(self.ai)
 
@@ -340,6 +343,64 @@ class MainWindow(QMainWindow):
         grid.addWidget(main, 1, 0, 1, 4)
         grid.setRowStretch(1, 1)
         return w
+
+    def _analytics(self) -> QWidget:
+        w = QWidget()
+        lay = QGridLayout(w)
+        lay.setContentsMargins(16, 16, 16, 16)
+        self.flow = table(["Month", "Income", "Expenses", "Net", "Savings (cumulative)"])
+        self.cmp = table(["Category", "Previous period", "This period", "Change", "%"])
+        self.cps = table(["Counterparty", "Total", "Records"])
+        self.rec = table(["Counterparty", "Cadence", "Typical amount", "Next expected"])
+        lay.addWidget(card(self.flow, "Cash flow and savings by month"), 0, 0)
+        lay.addWidget(card(self.cmp, "Compared with the previous period"), 0, 1)
+        lay.addWidget(card(self.cps, "Spending by counterparty"), 1, 0)
+        lay.addWidget(card(self.rec, "Recurring payments"), 1, 1)
+        return w
+
+    def _ask(self) -> QWidget:
+        from PySide6.QtWidgets import QLineEdit
+
+        w = QWidget()
+        lay = QVBoxLayout(w)
+        lay.setContentsMargins(16, 16, 16, 16)
+        self.question = QLineEdit()
+        self.question.setPlaceholderText("e.g. How much did I spend on food this year?  ·  unpaid invoices  ·  Alle Zahlungen an Swisscom")
+        self.answer = QLabel("")
+        self.answer.setObjectName("kpi")
+        self.answer.setWordWrap(True)
+        self.answer_items = table(["Result", "Status"])
+        note = QLabel("Answers are computed from your ledger, not by a language model. Double-click a result to open its evidence.")
+        note.setObjectName("muted")
+        lay.addWidget(self.question)
+        lay.addWidget(self.answer)
+        lay.addWidget(self.answer_items, 1)
+        lay.addWidget(note)
+        self.question.returnPressed.connect(lambda: self.ask(self.question.text()))
+        self.answer_items.itemDoubleClicked.connect(
+            lambda item: item.data(Qt.UserRole) and (self.nav.setCurrentRow(0), self.show_operation(item.data(Qt.UserRole))))
+        return w
+
+    def ask(self, text: str) -> dict:
+        result = assistant.ask(self.lens, text, self.today)
+        self.answer.setText(result["answer"])
+        fill(self.answer_items, [[i.get("label", ""), STATUS_LABEL.get(i.get("verification", ""), "")] for i in result["items"]],
+             [i.get("id") for i in result["items"]])
+        return result
+
+    def _refresh_analytics(self) -> None:
+        start, end = self.span()
+        if start.year < 1990:
+            start = date(self.today.year - 4, 1, 1)
+        end = min(end, self.today)
+        flow = analytics.cash_flow(self.lens, start, end)
+        fill(self.flow, [[f["month"], chf(f["income"]), chf(f["expenses"]), chf(f["net"]), chf(f["cumulative"])] for f in flow])
+        prev = analytics.previous_period(start, end)
+        fill(self.cmp, [[" / ".join(r["category"]), chf(r["a"]), chf(r["b"]), chf(r["change"]),
+                         (r["change_pct"] + " %") if r["change_pct"] else "new"] for r in analytics.compare(self.lens, prev, (start, end))])
+        fill(self.cps, [[c["counterparty"], chf(c["total"]), c["count"]] for c in analytics.by_counterparty(self.lens, start, end)])
+        fill(self.rec, [[r.counterparty, r.cadence, chf(r.typical_amount), r.next_expected.isoformat()]
+                        for r in analytics.detect_recurring(self.lens, self.today)])
 
     # ------------------------------------------------------------ data
     def span(self) -> tuple[date, date]:
@@ -453,6 +514,7 @@ class MainWindow(QMainWindow):
         fill(self.txs, [[r["op_date"], r["kind"], r["counterparty"], " / ".join(self.lens.category_path(r["category_id"])),
                          chf(r["amount"]), STATUS_LABEL[r["verification"]]] for r in rows],
              [str(r["operation_id"]) for r in rows])
+        self._refresh_analytics()
         acts = self.lens.ai_activity()
         fill(self.ai, [[str(a["at"])[:19], a["task"], a["provider"], a["locality"], a["summary"]] for a in acts])
         proposed = self.lens.db.execute(

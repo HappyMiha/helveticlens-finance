@@ -52,3 +52,13 @@ def test_desktop_drilldown(lens, tmp_path):
     w.open_category(())
     app.processEvents()
     w.grab().save(str(out / "desktop-overview.png"))
+
+    w.nav.setCurrentRow(5)
+    res = w.ask("How much did I spend on food this month?")
+    assert res["total"] == "67.80"
+    app.processEvents()
+    w.grab().save(str(out / "desktop-ask.png"))
+    w.nav.setCurrentRow(4)
+    app.processEvents()
+    assert w.flow.rowCount() == 1
+    w.grab().save(str(out / "desktop-analytics.png"))
