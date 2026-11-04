@@ -6,5 +6,6 @@ dist/
 *.egg-info/
 .env
 deploy/cloudflared/*.json
+deploy/cloudflared/config.yml
 deploy/cloudflared/cert.pem
 data/

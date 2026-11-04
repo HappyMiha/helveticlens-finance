@@ -1,0 +1,23 @@
+# finance.helveticlens.ch landing page.
+# Own project name, network and tunnel: nothing here touches the helveticlens.ch stack.
+name: helveticlens-finance
+services:
+  site:
+    build: ../site
+    image: helveticlens-finance-site:latest
+    restart: unless-stopped
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/healthz"]
+      interval: 30s
+      timeout: 3s
+  cloudflared:
+    image: cloudflare/cloudflared@sha256:51c9cefcb4569df44e1ad403ab1d3d8065aa8e84339bcfc6aee75502e1140339
+    restart: unless-stopped
+    command: ["tunnel", "--config", "/etc/cloudflared/config.yml", "--no-autoupdate", "run"]
+    volumes:
+      - ./cloudflared:/etc/cloudflared:ro
+    depends_on: [site]
