@@ -571,21 +571,33 @@ class MainWindow(QMainWindow):
 
     # ---------------------------------------------------- AI assist
     def toggle_ai(self, on: bool) -> None:
-        import urllib.request
+        from ..ai import local_model
 
-        url = os.environ.get("FL_MODEL_URL", "http://127.0.0.1:18765/v1")
+        def untick():
+            self.ai_action.blockSignals(True)
+            self.ai_action.setChecked(False)
+            self.ai_action.blockSignals(False)
+
         if on:
-            try:
-                urllib.request.urlopen(url.rstrip("/") + "/models", timeout=3).read()
-            except Exception:
+            url = os.environ.get("FL_MODEL_URL")  # an already running model server (e.g. packaging/apertus.sh)
+            if not url:
+                if not (local_model.status()["model_installed"] and local_model.status()["runtime_installed"]):
+                    untick()
+                    if not AIDialog(self).exec():
+                        return
+                try:
+                    url = local_model.start()
+                except Exception as exc:
+                    untick()
+                    QMessageBox.warning(self, "AI assist", f"The local model could not start: {exc}")
+                    return
+            self.lens.use_local_model(url, "apertus-8b")
+            if not self.ai_action.isChecked():
                 self.ai_action.blockSignals(True)
-                self.ai_action.setChecked(False)
+                self.ai_action.setChecked(True)
                 self.ai_action.blockSignals(False)
-                QMessageBox.information(self, "AI assist", "The local Apertus model is not running.\n\nStart it with "
-                                        "packaging/apertus.sh (needs Docker; downloads about 5 GB once), then switch AI "
-                                        "assist on again. Without it, Financial Lens uses its rules and arithmetic only.")
-                return
-            self.lens.use_local_model(url)
+        else:
+            local_model.stop()
         if self.lens.ai is not None:
             self.lens.set_ai_assist(on)
 
@@ -813,6 +825,87 @@ def _qr_label(text: str, box: int = 7):
     img.setPixmap(pix)
     img.setAlignment(Qt.AlignCenter)
     return img
+
+
+class AIDialog(QDialog):
+    """Download the local model once, with progress and checksum, then it runs on this computer only."""
+
+    def __init__(self, parent) -> None:
+        import threading
+
+        from PySide6.QtCore import QTimer
+        from PySide6.QtWidgets import QProgressBar
+
+        from ..ai import local_model
+
+        super().__init__(parent)
+        self.setWindowTitle("Local AI (Apertus)")
+        self.setStyleSheet(QSS)
+        self.setMinimumWidth(560)
+        st = local_model.status()
+        lay = QVBoxLayout(self)
+        text = QLabel(
+            f"<b>{st['model']}</b> · {st['licence']} · about {st['size_bytes'] / 1e9:.1f} GB<br><br>"
+            "Financial Lens can ask this Swiss open model when its rules are unsure about a document. "
+            "It runs only on this computer; your documents are never sent anywhere. The model and its small "
+            "runtime (llama.cpp) are downloaded once from Hugging Face and GitHub and checked against fixed "
+            "checksums.<br><br>Uses the graphics card when possible (NVIDIA, AMD, Intel, Apple), otherwise the "
+            "processor: then about 6 GB of free memory and roughly a minute per unclear document.")
+        text.setWordWrap(True)
+        lay.addWidget(text)
+        self.bar = QProgressBar()
+        self.bar.setRange(0, 1000)
+        self.label = QLabel("")
+        self.label.setObjectName("muted")
+        lay.addWidget(self.bar)
+        lay.addWidget(self.label)
+        row = QHBoxLayout()
+        self.go = QPushButton("Download and enable")
+        self.go.setObjectName("primary")
+        self.cancel_btn = QPushButton("Cancel")
+        row.addStretch()
+        row.addWidget(self.cancel_btn)
+        row.addWidget(self.go)
+        lay.addLayout(row)
+        self._cancel = threading.Event()
+        self._state = {"label": "", "frac": 0.0, "done": False, "error": None}
+        self.go.clicked.connect(self._start)
+        self.cancel_btn.clicked.connect(self._stop)
+        self._timer = QTimer(self)
+        self._timer.timeout.connect(self._tick)
+
+    def _start(self) -> None:
+        import threading
+
+        from ..ai import local_model
+
+        self.go.setEnabled(False)
+
+        def work():
+            try:
+                local_model.install(lambda l, f: self._state.update(label=l, frac=f), self._cancel)
+                self._state["done"] = True
+            except Exception as exc:
+                self._state["error"] = str(exc)
+
+        threading.Thread(target=work, daemon=True).start()
+        self._timer.start(200)
+
+    def _tick(self) -> None:
+        s = self._state
+        self.bar.setValue(int(s["frac"] * 1000))
+        self.label.setText(f"{s['label']} {s['frac']:.0%}" if s["label"] else "Starting…")
+        if s["error"]:
+            self._timer.stop()
+            self.label.setText(s["error"])
+            self.go.setEnabled(True)
+        elif s["done"]:
+            self._timer.stop()
+            self.accept()
+
+    def _stop(self) -> None:
+        self._cancel.set()
+        self.reject()
 
 
 class PairDialog(QDialog):

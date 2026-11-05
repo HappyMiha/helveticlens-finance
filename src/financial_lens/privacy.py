@@ -134,3 +134,18 @@ def document_may_leave(org_level: str, document_privacy: Optional[str], provider
     effective = min(order[org_level], order.get(document_privacy or "local_only", 0))
     allowed = {0: {"local"}, 1: {"local", "swiss"}, 2: {"local", "swiss", "external"}}[effective]
     return provider_locality in allowed
+
+
+@contextmanager
+def download_window():
+    """Temporarily allow outbound connections for a download the person started (model or runtime).
+    In local-only mode the guard is restored immediately afterwards; documents are never sent."""
+    was_active = _active
+    keep = set(_allowed_hosts)
+    if was_active:
+        release()
+    try:
+        yield
+    finally:
+        if was_active:
+            enforce_local_only(keep)

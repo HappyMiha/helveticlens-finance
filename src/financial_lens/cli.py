@@ -90,6 +90,8 @@ def main(argv=None) -> int:
     ev.add_argument("--photos", action="store_true", help="also test photo versions (OCR)")
     ev.add_argument("--hard", action="store_true", help="also test wording the rules were not written for")
     ev.add_argument("--verbose", action="store_true")
+    ai = sub.add_parser("ai", help="local AI model (Apertus): status, install, start, remove")
+    ai.add_argument("action", choices=["status", "install", "start", "remove"])
     pr = sub.add_parser("pair", help="pair a phone for uploads; prints the link and a QR code")
     pr.add_argument("--name", default="Phone")
     pv = sub.add_parser("privacy")
@@ -103,6 +105,27 @@ def main(argv=None) -> int:
             print("Listening on the network: other devices can reach only the paired-phone upload page (/m); "
                   "everything else answers this machine only.", file=sys.stderr)
         uvicorn.run("financial_lens.api.app:app", host=args.host, port=args.port)
+        return 0
+    if args.cmd == "ai":
+        from .ai import local_model as L
+
+        if args.action == "install":
+            last = [""]
+
+            def show(label, frac):
+                line = f"{label} {frac:.0%}"
+                if line != last[0]:
+                    print("\r" + line, end="", flush=True)
+                    last[0] = line
+            L.install(show)
+            print()
+        elif args.action == "start":
+            print(L.start())
+            input("Running on this computer only. Press Enter to stop.")
+            L.stop()
+        elif args.action == "remove":
+            L.remove()
+        print(L.status())
         return 0
     if args.cmd == "eval":
         from . import evaluation as E
