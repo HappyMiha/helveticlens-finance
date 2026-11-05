@@ -3,10 +3,16 @@ on:
   push:
     tags: ["v*"]
   workflow_dispatch:
+    inputs:
+      release:
+        description: "Publish a release with this tag (e.g. v0.9.1); empty = build only"
+        required: false
+        default: ""
 permissions:
   contents: write
 env:
-  FL_VERSION: ${{ github.ref_type == 'tag' && github.ref_name || '0.5.0-dev' }}
+  FL_VERSION: ${{ github.ref_type == 'tag' && github.ref_name || inputs.release || '0.5.0-dev' }}
+  RELEASE_TAG: ${{ github.ref_type == 'tag' && github.ref_name || inputs.release }}
 jobs:
   linux:
     runs-on: ubuntu-24.04
@@ -97,7 +103,7 @@ jobs:
         run: ./gradlew --no-daemon assembleDebug assembleDebugAndroidTest
 
   release:
-    if: github.ref_type == 'tag'
+    if: github.ref_type == 'tag' || inputs.release != ''
     needs: [linux, windows, macos]
     runs-on: ubuntu-24.04
     steps:
@@ -111,6 +117,6 @@ jobs:
       - env: {GH_TOKEN: "${{ github.token }}"}
         run: |
           APK=""; [ -f out/dist/FinancialLens-Android.apk ] && APK=out/dist/FinancialLens-Android.apk
-          gh release create "${{ github.ref_name }}" --repo "${{ github.repository }}" --title "Financial Lens ${{ github.ref_name }}" \
+          gh release create "$RELEASE_TAG" --repo "${{ github.repository }}" --target "${{ github.sha }}" --title "Financial Lens $RELEASE_TAG" \
             --notes "Desktop installers for Linux (AppImage), Windows (installer) and macOS (Apple silicon). Each build passed its self-test (OCR, embedded PostgreSQL, matching, window). The builds are not code-signed yet: Windows SmartScreen and macOS Gatekeeper will ask for confirmation on first start." \
             out/dist/FinancialLens-x86_64.AppImage out/dist/FinancialLens-Setup-x64.exe out/dist/FinancialLens-macOS-arm64.dmg $APK
