@@ -5,15 +5,15 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Financial Lens · Helvetic Lens</title>
   <meta name="description" content="Evidence-first, offline-first finance for households, businesses and cooperatives. Open source.">
-  <link rel="icon" href="assets/favicon.svg?v=20261105124648" type="image/svg+xml">
-  <link rel="stylesheet" href="assets/design-tokens.css?v=20261105124648">
-  <link rel="stylesheet" href="assets/site.css?v=20261105124648">
+  <link rel="icon" href="assets/favicon.svg?v=20261105160604" type="image/svg+xml">
+  <link rel="stylesheet" href="assets/design-tokens.css?v=20261105160604">
+  <link rel="stylesheet" href="assets/site.css?v=20261105160604">
 </head>
 <body>
   <a class="skip" href="#main" data-i18n="skip">Skip to content</a>
   <header class="top">
     <div class="wrap">
-      <a class="brand" href="./"><img src="assets/favicon.svg?v=20261105124648" alt=""> <span>Helvetic Lens <small>Financial Lens</small></span></a>
+      <a class="brand" href="./"><img src="assets/favicon.svg?v=20261105160604" alt=""> <span>Helvetic Lens <small>Financial Lens</small></span></a>
       <label class="lang"><span class="skip" data-i18n="language">Language</span>
         <select id="lang" aria-label="Language">
           <option value="en-CH">English</option>
@@ -115,6 +115,29 @@
       </div>
     </section>
 
+    <section id="accuracy" aria-labelledby="h-acc">
+      <div class="wrap">
+        <h2 id="h-acc" data-i18n="accTitle">How accurate is it?</h2>
+        <p class="lead small-lead" data-i18n="accLead">Measured on 5 November 2026 with and without the optional local model Apertus (Swiss open-source AI). The key number is false confirmations: a document marked as reconciled although a value is wrong. It is zero in every test — whatever cannot be proven by the arithmetic goes to review with the reason.</p>
+        <div class="table-scroll">
+          <table class="acc num">
+            <thead><tr><th data-i18n="accSet">Test set</th><th data-i18n="accRules">Rules + arithmetic</th>
+              <th>+ Apertus 1.0</th><th>+ Apertus 1.5</th><th data-i18n="accFalse">False confirmations</th></tr></thead>
+            <tbody>
+              <tr><td data-i18n="accR5">Standard layouts in 4 languages (96)</td><td>100 %</td><td>100 %</td><td>100 %</td><td class="zero">0</td></tr>
+              <tr><td data-i18n="accR1">Payslips with unfamiliar wording (16)</td><td>0 % <span class="meta">(<span data-i18n="accReview">all to review</span>)</span></td><td><strong>94 %</strong></td><td>88 %</td><td class="zero">0</td></tr>
+              <tr><td data-i18n="accR2">Damaged scans: skewed, upside down, perspective, shadow, JPEG noise (90)</td><td>73 %</td><td>73 %</td><td>76 %</td><td class="zero">0</td></tr>
+              <tr><td data-i18n="accR3">Real receipt scans (SROIE), straight: correct total / confirmed automatically</td><td>70 % / 25 %</td><td>—</td><td>70 % / 35 %</td><td class="zero">0</td></tr>
+              <tr><td data-i18n="accR4">Real receipt scans, upside down</td><td>55 % / 15 %</td><td>—</td><td>55 % / 25 %</td><td class="zero">0</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p class="meta note" data-i18n="accHow">Method: generated Swiss-style payslips, bank statements and invoices in German, French, Italian and English (as PDF and damaged photos), plus 20 real receipt scans from the public SROIE dataset in eight damage variants. The model is asked only when the rules are unsure, and its reading counts only if the arithmetic then reconciles.</p>
+        <p class="meta" data-i18n="accLimits">Known limits: blurry low-resolution photos remain the weakest input (about 35 % correct totals); the model helps with unfamiliar wording but cannot repair digits the OCR misread. Reading images directly with Apertus 1.5 needs a newer graphics card than tested here.</p>
+        <p><a href="https://github.com/HappyMiha/helveticlens-finance/blob/main/docs/EVALUATION.md" data-i18n="accLink">Full report and how to reproduce it</a> →</p>
+      </div>
+    </section>
+
     <section aria-labelledby="h-road">
       <div class="wrap">
         <h2 id="h-road" data-i18n="roadTitle">What already works</h2>
@@ -135,6 +158,6 @@
       <span><a href="https://helveticlens.ch/">helveticlens.ch</a></span>
     </div>
   </footer>
-  <script src="assets/site.js?v=20261105124648" defer></script>
+  <script src="assets/site.js?v=20261105160604" defer></script>
 </body>
 </html>
