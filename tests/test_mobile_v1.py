@@ -184,3 +184,24 @@ def test_desktop_serves_pinned_https_for_phones(lens, monkeypatch, tmp_path):
     assert f"fp={served}" in offer["uri"]
     w._server.should_exit = True
     app.processEvents()
+
+
+def test_pair_dialog_shows_install_and_connect_steps(lens, tmp_path):
+    pytest.importorskip("PySide6")
+    import os
+    from pathlib import Path
+    from PySide6.QtWidgets import QApplication, QLabel
+    from financial_lens.desktop.main import APP_DOWNLOAD_URL, MainWindow, PairDialog
+
+    app = QApplication.instance() or QApplication([])
+    w = MainWindow(lens)
+    d = PairDialog(w, "fl://pair?v=1&addr=192.168.1.20%3A8766&fp=" + "ab" * 32 + "&offer=o&otp=s")
+    texts = " ".join(l.text() for l in d.findChildren(QLabel))
+    assert "1 · Install the app" in texts and "2 · Connect this phone" in texts
+    assert APP_DOWNLOAD_URL.endswith("FinancialLens-Android.apk")
+    d.resize(760, 560)
+    d.show()
+    app.processEvents()
+    out = Path(os.environ.get("FL_SCREENSHOTS", tmp_path))
+    out.mkdir(parents=True, exist_ok=True)
+    d.grab().save(str(out / "desktop-pair-phone.png"))

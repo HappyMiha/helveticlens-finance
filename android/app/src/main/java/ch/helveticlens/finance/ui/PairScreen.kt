@@ -39,8 +39,11 @@ fun PairScreen(onPaired: (LensClient) -> Unit) {
     Column(Modifier.fillMaxSize().padding(24.dp), verticalArrangement = Arrangement.Center) {
         Text("Connect to Financial Lens", style = MaterialTheme.typography.headlineSmall)
         Spacer(Modifier.height(12.dp))
-        Text("On your computer open Financial Lens → “Pair phone”, then scan the code. Phone and computer must be on " +
-            "the same Wi-Fi. The code works once and expires after 5 minutes.", color = T.muted)
+        Text("1.  On your computer, open Financial Lens and click “Pair phone”.", color = T.text)
+        Spacer(Modifier.height(8.dp))
+        Text("2.  Tap the button below and point the camera at the code “Connect this phone”.", color = T.text)
+        Spacer(Modifier.height(12.dp))
+        Text("Phone and computer must be on the same Wi-Fi. The code works once and expires after 5 minutes.", color = T.muted)
         Spacer(Modifier.height(24.dp))
         Button(enabled = !busy, modifier = Modifier.fillMaxWidth().height(56.dp), onClick = {
             // Google's code scanner: runs on the phone, needs no camera permission for this app.

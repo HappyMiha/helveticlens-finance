@@ -44,7 +44,7 @@ GREY = "#3b3f46"
 
 QSS = f"""
 * {{ font-family: 'Inter', 'Helvetica Neue', Arial, sans-serif; font-size: 13px; color: {TOKENS['text']}; }}
-QMainWindow, QWidget#root {{ background: {TOKENS['bg']}; }}
+QMainWindow, QWidget#root, QDialog {{ background: {TOKENS['bg']}; }}
 QFrame#card {{ background: {TOKENS['surface']}; border: 1px solid {TOKENS['line']}; border-radius: 12px; }}
 QLabel#muted {{ color: {TOKENS['muted']}; }}
 QLabel#kpi {{ font-size: 22px; font-weight: 600; }}
@@ -755,31 +755,65 @@ class ManualDialog(QDialog):
                 "description": self.description.text().strip(), "attachment": self.attachment}
 
 
+APP_DOWNLOAD_URL = "https://github.com/HappyMiha/helveticlens-finance/releases/latest/download/FinancialLens-Android.apk"
+
+
+def _qr_label(text: str, box: int = 7):
+    import io
+
+    import qrcode
+    from PySide6.QtGui import QPixmap
+
+    buf = io.BytesIO()
+    qrcode.make(text, border=2, box_size=box).save(buf, "PNG")
+    pix = QPixmap()
+    pix.loadFromData(buf.getvalue())
+    img = QLabel()
+    img.setPixmap(pix)
+    img.setAlignment(Qt.AlignCenter)
+    return img
+
+
 class PairDialog(QDialog):
+    """Two clear steps: get the app, then connect this phone."""
+
     def __init__(self, parent, url: str) -> None:
         super().__init__(parent)
         self.setWindowTitle("Pair phone")
         self.setStyleSheet(QSS)
-        lay = QVBoxLayout(self)
-        import io
-
-        import qrcode
-        from PySide6.QtGui import QPixmap
-
-        buf = io.BytesIO()
-        qrcode.make(url, border=2, box_size=8).save(buf, "PNG")
-        pix = QPixmap()
-        pix.loadFromData(buf.getvalue())
-        img = QLabel()
-        img.setPixmap(pix)
-        img.setAlignment(Qt.AlignCenter)
-        lay.addWidget(QLabel("Open the Financial Lens app on your phone and scan this code (same Wi-Fi).\n"
-                             "It works once and expires in 5 minutes. You can revoke the phone at any time."))
-        lay.addWidget(img)
-        link = QLabel(url.split("&otp=")[0].split("#")[0])
-        link.setObjectName("muted")
-        lay.addWidget(link)
         self.url = url
+        outer = QVBoxLayout(self)
+        intro = QLabel("Use the Financial Lens app on your Android phone to photograph and scan receipts. "
+                       "Phone and computer must be on the same Wi-Fi.")
+        intro.setWordWrap(True)
+        outer.addWidget(intro)
+        row = QHBoxLayout()
+        for title, body, qr in (
+            ("1 · Install the app", "Point the phone camera at this code and open the link to download the app. "
+             "When Android asks, allow installing from your browser; if Play Protect appears, choose "
+             "“More details” → “Install anyway”. Skip this step if the app is already on the phone.", APP_DOWNLOAD_URL),
+            ("2 · Connect this phone", "Open Financial Lens on the phone, tap “Scan pairing code” and point it at this "
+             "code. It works once and expires in 5 minutes.", url),
+        ):
+            box = QVBoxLayout()
+            t = QLabel(title)
+            t.setObjectName("kpi")
+            b = QLabel(body)
+            b.setWordWrap(True)
+            b.setObjectName("muted")
+            box.addWidget(t)
+            box.addWidget(b)
+            box.addWidget(_qr_label(qr))
+            frame = QWidget()
+            frame.setLayout(box)
+            frame.setMinimumWidth(330)
+            row.addWidget(card(frame))
+        outer.addLayout(row)
+        foot = QLabel("You can disconnect a phone at any time. Only this computer keeps your data; the phone shows it "
+                      "while it is on the same Wi-Fi.")
+        foot.setWordWrap(True)
+        foot.setObjectName("muted")
+        outer.addWidget(foot)
 
 
 def _e(text) -> str:

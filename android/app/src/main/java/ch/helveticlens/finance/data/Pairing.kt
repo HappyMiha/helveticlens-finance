@@ -7,8 +7,15 @@ data class PairingOffer(val address: String, val fingerprint: String, val offer:
     companion object {
         /** Parses fl://pair?v=1&addr=…&fp=…&offer=…&otp=…&scopes=… and rejects anything else. */
         fun parse(text: String): PairingOffer {
-            val uri = try { URI(text.trim()) } catch (e: Exception) { throw IllegalArgumentException("This is not a Financial Lens pairing code.") }
-            if (uri.scheme != "fl" || uri.host != "pair") throw IllegalArgumentException("This is not a Financial Lens pairing code.")
+            val t = text.trim()
+            if (Regex("^https?://[^/]+/m(#t=|$)").containsMatchIn(t))
+                throw IllegalArgumentException("This code is from an older Financial Lens on your computer. " +
+                    "Update Financial Lens on the computer to 0.6.1 or newer (finance.helveticlens.ch), then press “Pair phone” again.")
+            if (t.contains("github.com/HappyMiha/helveticlens-finance") || t.contains("finance.helveticlens.ch"))
+                throw IllegalArgumentException("That was the download code. Now scan the second code, “Connect this phone”, in the Pair phone window.")
+            val uri = try { URI(t) } catch (e: Exception) { throw IllegalArgumentException("This is not a Financial Lens pairing code.") }
+            if (uri.scheme != "fl" || uri.host != "pair") throw IllegalArgumentException("This is not a Financial Lens pairing code. " +
+                "On your computer open Financial Lens → “Pair phone” and scan the code shown there.")
             val q = (uri.rawQuery ?: "").split("&").filter { it.contains("=") }.associate {
                 val (k, v) = it.split("=", limit = 2); k to URLDecoder.decode(v, "UTF-8")
             }

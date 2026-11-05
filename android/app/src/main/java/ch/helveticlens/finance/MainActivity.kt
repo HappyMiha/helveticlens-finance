@@ -43,7 +43,9 @@ class MainActivity : FragmentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        window.setFlags(WindowManager.LayoutParams.FLAG_SECURE, WindowManager.LayoutParams.FLAG_SECURE) // no screenshots, hidden in Recents
+        // No screenshots, hidden in Recents. Debug builds allow screenshots for the installation guide.
+        if (!BuildConfig.DEBUG || !intent.getBooleanExtra("guide_screenshots", false))
+            window.setFlags(WindowManager.LayoutParams.FLAG_SECURE, WindowManager.LayoutParams.FLAG_SECURE)
         UploadQueue.init(this)
         handleShare(intent)
         lifecycle.addObserver(LifecycleEventObserver { _, e ->
