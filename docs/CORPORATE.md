@@ -88,29 +88,19 @@ afterwards. *Download CSV* gives the whole log for the auditor.
 
 ## Issuing keys (Helvetic Lens)
 
-Requests arrive at info@helveticlens.ch (the Licence page has an *E-mail the request* button).
-
-Once, on the issuer's own computer:
-
-```bash
-financial-lens license keygen issuer.key.enc
-```
-
-This writes the private key to `~/.config/financial-lens-issuer/issuer.key`, asks for a passphrase and writes an
-encrypted backup (`issuer.key.enc`, AES-256-GCM with a scrypt-derived key) that is safe to keep in a private
-repository. It also prints the private and public key: put the private key and the passphrase in a password
-manager. The public key goes into `ISSUER_PUBLIC_KEYS` in `src/financial_lens/licensing.py`.
-
-On a new computer: `financial-lens license restore-key issuer.key.enc`.
-If the private key is ever lost or leaked, make a new one and add its public key next to the old one
-(or replace it, if leaked); keys already sold stay valid as long as their public key stays in the list.
-
-For each customer:
+Requests arrive at info@helveticlens.ch (the Licence page has an *E-mail the request* button). The issuer's private
+key lives in the password manager; its public key is already in `ISSUER_PUBLIC_KEYS`. To answer a request, on any
+computer with Financial Lens installed:
 
 ```bash
 financial-lens license issue FLR1.… --plan monthly --seats 25 --months 12   # CHF 300
 financial-lens license issue FLR1.… --plan 2y --seats 25                    # CHF 250, valid 24 months
 ```
 
-It prints the customer, number of users, period and price, then the key (`FLK1.…`) to send back.
-Payment is arranged outside the software.
+It asks for the private key (paste it from the password manager; it is not stored), prints customer, users,
+period and price, then the key (`FLK1.…`) to send back. Payment is arranged outside the software.
+
+If the private key is ever lost or leaked: `financial-lens license keygen` makes a new one; add its public key to
+`ISSUER_PUBLIC_KEYS` (and remove the old one if it leaked). Keys already sold stay valid while their public key
+stays in the list. `license keygen FILE` / `backup-key FILE` / `restore-key FILE` also keep a passphrase-encrypted
+copy, if wanted.

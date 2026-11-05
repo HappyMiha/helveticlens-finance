@@ -352,12 +352,16 @@ def _issuer(args) -> int:
         print(f"  private key: {priv}")
         print(f"Public key (goes into ISSUER_PUBLIC_KEYS): {L.public_of(priv)}")
         return 0
-    if not path.exists():
-        sys.exit(f"No issuer key at {path}. Run `financial-lens license keygen` first.")
-    code = args.value or input("Request code: ")
+    code = args.value or input("Request code (FLR1.…): ")
+    if path.exists():
+        priv = path.read_text().strip()
+    else:  # no key file on this computer: paste it from the password manager, it is not stored
+        priv = (os.environ.get("FL_ISSUER_PRIVATE_KEY") or getpass.getpass("Issuer private key (from the password manager): ")).strip()
+        if L.public_of(priv) not in L.ISSUER_PUBLIC_KEYS + [os.environ.get("FL_LICENSE_PUBKEY", "")]:
+            sys.exit("This is not the Helvetic Lens issuer key.")
     req = L.read_request(code)
     seats = args.seats or max(int(req.get("users", 1)), 1)
-    key = L.issue(path.read_text().strip(), code, args.plan, seats, args.months, args.customer)
+    key = L.issue(priv, code, args.plan, seats, args.months, args.customer)
     months = 24 if args.plan == "2y" else args.months
     print(f"Customer: {args.customer or req.get('org')} · {seats} users · {args.plan} · {months} months · "
           f"price CHF {L.price(args.plan, seats, months)}")

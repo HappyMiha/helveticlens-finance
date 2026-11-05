@@ -39,7 +39,7 @@ LICENSE_CONTACT = os.environ.get("FL_LICENSE_CONTACT", "info@helveticlens.ch")
 
 # Public keys of the Helvetic Lens licence issuer (raw Ed25519, base64). Several may be listed while a key
 # is rotated. FL_LICENSE_PUBKEY adds one (used by tests and private builds).
-ISSUER_PUBLIC_KEYS: list[str] = []
+ISSUER_PUBLIC_KEYS: list[str] = ["jqk8Uc0TkrXMmaPRSTbyW0JHqj0m7gMkgJiiuggFBF8="]  # Helvetic Lens, 2026-11-05
 
 
 class LicenseError(ValueError):
