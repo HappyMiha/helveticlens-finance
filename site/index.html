@@ -5,15 +5,15 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Financial Lens · Helvetic Lens</title>
   <meta name="description" content="Evidence-first, offline-first finance for households, businesses and cooperatives. Open source.">
-  <link rel="icon" href="assets/favicon.svg?v=202611050735" type="image/svg+xml">
-  <link rel="stylesheet" href="assets/design-tokens.css?v=202611050735">
-  <link rel="stylesheet" href="assets/site.css?v=202611050735">
+  <link rel="icon" href="assets/favicon.svg?v=202611050827" type="image/svg+xml">
+  <link rel="stylesheet" href="assets/design-tokens.css?v=202611050827">
+  <link rel="stylesheet" href="assets/site.css?v=202611050827">
 </head>
 <body>
   <a class="skip" href="#main" data-i18n="skip">Skip to content</a>
   <header class="top">
     <div class="wrap">
-      <a class="brand" href="./"><img src="assets/favicon.svg?v=202611050735" alt=""> <span>Helvetic Lens <small>Financial Lens</small></span></a>
+      <a class="brand" href="./"><img src="assets/favicon.svg?v=202611050827" alt=""> <span>Helvetic Lens <small>Financial Lens</small></span></a>
       <label class="lang"><span class="skip" data-i18n="language">Language</span>
         <select id="lang" aria-label="Language">
           <option value="en-CH">English</option>
@@ -33,7 +33,8 @@
       <h1 data-i18n="title">See where the money went. Inspect why.</h1>
       <p class="lead" data-i18n="lead">Financial Lens is a desktop application for household, business and cooperative finances. It reads receipts, invoices and bank statements, matches invoices with payments and keeps the original document behind every number.</p>
       <div class="actions">
-        <a class="btn primary" href="#demo" data-i18n="ctaDemo">Explore the sample treemap</a>
+        <a class="btn primary" href="#download" data-i18n="ctaDownload">Download the app</a>
+        <a class="btn" href="#demo" data-i18n="ctaDemo">Explore the sample treemap</a>
         <a class="btn" href="https://github.com/HappyMiha/helveticlens-finance" data-i18n="ctaCode">Source code</a>
       </div>
     </div>
@@ -68,6 +69,19 @@
       </div>
     </section>
 
+    <section id="download" aria-labelledby="h-download">
+      <div class="wrap">
+        <h2 id="h-download" data-i18n="dlTitle">Download</h2>
+        <p class="muted" data-i18n="dlLead">A native desktop app. Everything runs on your computer: database, OCR and matching are included, nothing else to install.</p>
+        <div class="grid downloads">
+          <a class="card dl" href="https://github.com/HappyMiha/helveticlens-finance/releases/latest/download/FinancialLens-Setup-x64.exe"><h3>Windows</h3><p data-i18n="dlWin">Windows 10/11 · installer</p></a>
+          <a class="card dl" href="https://github.com/HappyMiha/helveticlens-finance/releases/latest/download/FinancialLens-macOS-arm64.dmg"><h3>macOS</h3><p data-i18n="dlMac">macOS 14+ · Apple silicon</p></a>
+          <a class="card dl" href="https://github.com/HappyMiha/helveticlens-finance/releases/latest/download/FinancialLens-x86_64.AppImage"><h3>Linux</h3><p data-i18n="dlLinux">Linux · AppImage</p></a>
+        </div>
+        <p class="meta note" data-i18n="dlUnsigned">The installers are not code-signed yet. Windows may show “Windows protected your PC” (choose More info → Run anyway); on macOS open the app with right-click → Open the first time. On Linux make the file executable and start it.</p>
+      </div>
+    </section>
+
     <section aria-labelledby="h-privacy">
       <div class="wrap levels">
         <h2 id="h-privacy" data-i18n="privTitle">You choose where your documents go</h2>
@@ -89,7 +103,7 @@
           <li data-i18n="r3">Phase 3 — personal, business and cooperative profiles: members, contributions and arrears, earmarked funds, cost allocation per building, roles, projects, budgets, reports and full export.</li>
           <li data-i18n="r4">Phase 4 — three privacy levels with the network blocked in local-only mode, Swiss or external models only with your consent and with identifiers removed, encrypted backups, tamper-evident audit log, security self-check.</li>
         </ol>
-        <p class="meta" data-i18n="roadNote">Not yet available: a ready-made installer, accounts and live bank connections. The source code and setup instructions are on GitHub.</p>
+        <p class="meta" data-i18n="roadNote">Not yet available: accounts, live bank connections and code-signed installers.</p>
       </div>
     </section>
   </main>
@@ -100,6 +114,6 @@
       <span><a href="https://helveticlens.ch/">helveticlens.ch</a></span>
     </div>
   </footer>
-  <script src="assets/site.js?v=202611050735" defer></script>
+  <script src="assets/site.js?v=202611050827" defer></script>
 </body>
 </html>

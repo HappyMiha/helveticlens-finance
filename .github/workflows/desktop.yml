@@ -44,6 +44,16 @@ jobs:
           $p = Start-Process -FilePath build\pyi\dist\FinancialLens\FinancialLens.exe -ArgumentList "--self-test","$PWD\selftest-windows.png" -Wait -PassThru
           Get-Content selftest-windows.json
           if ($p.ExitCode -ne 0) { exit 1 }
+      - name: Diagnose embedded PostgreSQL
+        if: failure()
+        shell: pwsh
+        run: |
+          $b = "build\pyi\dist\FinancialLens\_internal\pgserver\pginstall\bin"
+          whoami /groups | Select-String "Administrators"
+          & "$b\initdb.exe" -D "$env:RUNNER_TEMP\pgtest1" --auth=trust -U postgres 2>&1 | Select-Object -Last 15
+          New-Item -ItemType Directory "$env:RUNNER_TEMP\pgtest2" | Out-Null
+          & "$b\initdb.exe" -D "$env:RUNNER_TEMP\pgtest2" --auth=trust -U postgres 2>&1 | Select-Object -Last 15
+          & "$b\initdb.exe" -D "C:\pgtest3" --auth=trust -U postgres 2>&1 | Select-Object -Last 15
       - name: Installer
         shell: pwsh
         run: '& "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" packaging\windows\financial-lens.iss'
@@ -64,7 +74,7 @@ jobs:
           echo "FL_TESSDATA=$TD" >> $GITHUB_ENV
       # psycopg 3.1 links against libpq 16, the same major version as the embedded PostgreSQL, so the
       # one libpq in the bundle serves both (newer psycopg needs libpq 17 symbols).
-      - run: pip install "pyinstaller>=6.11" ".[api,db,security,ocr,embedded]" "psycopg[binary]>=3.1.18,<3.2" "PySide6-Essentials>=6.8" openpyxl
+      - run: pip install "pyinstaller>=6.11" ".[api,security,ocr,embedded]" "psycopg[binary]>=3.1.18,<3.2" "PySide6-Essentials>=6.8" openpyxl
       - run: pyinstaller --noconfirm --clean --distpath build/pyi/dist --workpath build/pyi/work packaging/financial-lens.spec
       - name: Self-test the build
         run: QT_QPA_PLATFORM=offscreen "build/pyi/dist/Financial Lens.app/Contents/MacOS/FinancialLens" --self-test selftest-macos.png

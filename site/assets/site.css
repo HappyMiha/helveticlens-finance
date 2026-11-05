@@ -122,3 +122,6 @@ footer { border-top: 1px solid var(--line); padding: var(--space-4) 0 var(--spac
 footer .wrap { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 12px; }
 .note { margin-top: 16px; }
 .status.ok::before { background: var(--success); }
+a.card.dl { text-decoration: none; transition: border-color var(--motion-fast) var(--hl-ease); }
+a.card.dl:hover, a.card.dl:focus-visible { border-color: var(--line-strong); }
+a.card.dl h3::after { content: " ↓"; color: var(--text-secondary); }
