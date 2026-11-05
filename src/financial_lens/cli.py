@@ -83,6 +83,13 @@ def main(argv=None) -> int:
     ml.add_argument("--user", default=os.environ.get("FL_MAIL_USER", ""))
     ml.add_argument("--folder", default=os.environ.get("FL_MAIL_FOLDER", "INBOX"))
     ml.add_argument("--from", dest="senders", action="append", help="only accept these senders (repeatable)")
+    ev = sub.add_parser("eval", help="compare document understanding with and without a model")
+    ev.add_argument("--model", help="OpenAI-compatible URL of a local model, e.g. http://127.0.0.1:18765/v1")
+    ev.add_argument("--model-name", default="apertus-8b")
+    ev.add_argument("--n", type=int, default=6, help="documents per type and language")
+    ev.add_argument("--photos", action="store_true", help="also test photo versions (OCR)")
+    ev.add_argument("--hard", action="store_true", help="also test wording the rules were not written for")
+    ev.add_argument("--verbose", action="store_true")
     pr = sub.add_parser("pair", help="pair a phone for uploads; prints the link and a QR code")
     pr.add_argument("--name", default="Phone")
     pv = sub.add_parser("privacy")
@@ -96,6 +103,22 @@ def main(argv=None) -> int:
             print("Listening on the network: other devices can reach only the paired-phone upload page (/m); "
                   "everything else answers this machine only.", file=sys.stderr)
         uvicorn.run("financial_lens.api.app:app", host=args.host, port=args.port)
+        return 0
+    if args.cmd == "eval":
+        from . import evaluation as E
+        from .ai.providers import OpenAICompatible, Orchestrator
+
+        sets = [("standard", E.corpus(args.n, args.photos))] + ([("unseen wording", E.corpus(args.n, hard=True))] if args.hard else [])
+        model = None
+        if args.model:
+            p = OpenAICompatible("eval-model", args.model, args.model_name, "local", timeout=600)
+            model = Orchestrator(routes={"understand": [p]})
+        print(E.HEADER)
+        for label, docs in sets:
+            say = print if args.verbose else None
+            print(E.report(f"{label} · rules only", E.run(docs, None, say)))
+            if model:
+                print(E.report(f"{label} · rules + {args.model_name}", E.run(docs, model, say)))
         return 0
     if args.cmd == "desktop":
         from .desktop.main import main as desktop

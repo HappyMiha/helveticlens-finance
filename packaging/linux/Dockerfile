@@ -11,6 +11,7 @@ WORKDIR /src
 COPY pyproject.toml README.md ./
 COPY src ./src
 RUN python3.12 -m pip install --no-cache-dir ".[api,db,security,ocr,embedded]" "PySide6-Essentials>=6.8" openpyxl
+RUN curl -fsSL -o /usr/share/tesseract/tessdata/osd.traineddata https://github.com/tesseract-ocr/tessdata_fast/raw/4.1.0/osd.traineddata
 RUN curl -fsSL -o /usr/local/bin/appimagetool \
       https://github.com/AppImage/appimagetool/releases/download/1.9.0/appimagetool-x86_64.AppImage \
     && chmod +x /usr/local/bin/appimagetool

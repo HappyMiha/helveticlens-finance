@@ -13,6 +13,7 @@ import subprocess
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Optional
 
 
 @dataclass
@@ -138,7 +139,7 @@ def _ocr_image(image, page: int, start: int) -> list[Line]:
         if image.width < 1500:
             factor = 1500 / image.width
             image = image.resize((int(image.width * factor), int(image.height * factor)))
-        image.convert("L").save(src)
+        flatten_light(image.convert("L")).save(src)
         out = subprocess.run(
             [tesseract_cmd(), str(src), "stdout", "-l", LANGS, "--psm", "6", "tsv"],
             capture_output=True, text=True, timeout=180, env=_tess_env(),
@@ -173,12 +174,126 @@ def recognise(data: bytes, media_type: str) -> TextResult:
         image = _load_image(data)
         result = TextResult(_tesseract_version())
         result.qr_payloads = decode_qr(image)
+        image, notes = straighten(image)
         result.lines = _ocr_image(image, 1, 1)
+        result.engine += "".join(f"+{n}" for n in notes)
         return result
     if media_type.startswith("text/"):
         text = data.decode("utf-8", errors="replace")
         return TextResult("text", [Line(i + 1, 1, t) for i, t in enumerate(text.splitlines()) if t.strip()])
     raise ValueError(f"No text engine for {media_type}")
+
+
+def flatten_light(gray):
+    """Even out shadows and dim light: divide the page by its own blurred background, so ink stays dark
+    and the paper becomes evenly white. Applied only when the lighting is uneven."""
+    from PIL import ImageChops, ImageFilter, ImageOps
+
+    small = gray.resize((max(gray.width // 8, 1), max(gray.height // 8, 1)))
+    bg_small = small.filter(ImageFilter.MaxFilter(5)).filter(ImageFilter.GaussianBlur(6))
+    lo, hi = bg_small.getextrema()
+    if hi - lo < 45 and hi > 170:
+        return gray  # evenly lit: leave it alone
+    bg = bg_small.resize(gray.size, resample=2)
+    ink = ImageChops.subtract(bg, gray)  # how much darker than the paper around it
+    return ImageOps.autocontrast(ImageOps.invert(ink), cutoff=1)
+
+
+def _quality(lines: list[Line]) -> float:
+    """How readable an OCR result is: confident, real words count; noise does not."""
+    import re
+
+    score = 0.0
+    for l in lines:
+        for w in (l.words or []):
+            t = w.text
+            if len(t) >= 3 and re.fullmatch(r"[A-Za-zÄÖÜäöüÉÈÀéèàçß0-9.,'’:/%()-]+", t):
+                score += 1
+        score += (l.confidence or 0) * 0.5
+    return score
+
+
+def _deskew(image):
+    """Small rotations (crooked photos and scans): choose the angle at which text rows are sharpest
+    (projection profile), using only Pillow."""
+    from PIL import ImageOps
+
+    small = ImageOps.grayscale(image)
+    small.thumbnail((900, 900))
+    small = ImageOps.autocontrast(small).point(lambda v: 255 if v < 140 else 0)  # ink = white
+
+    def sharpness(angle: float) -> float:
+        r = small.rotate(angle, expand=False, fillcolor=0)
+        col = r.resize((1, r.height), resample=1)  # 1 = BOX: the mean of every row
+        vals = list(col.getdata())
+        m = sum(vals) / len(vals)
+        return sum((v - m) ** 2 for v in vals)
+
+    best = max((a / 2 for a in range(-24, 25)), key=sharpness)  # -12° … +12° in 0.5° steps
+    best = max((best + d / 10 for d in range(-5, 6)), key=sharpness)
+    return best
+
+
+def straighten(image) -> tuple:
+    """Upright and level before OCR: try the four orientations when the first reading is poor,
+    then correct small skew. Returns the image and notes for provenance."""
+    notes = []
+    probe = image.copy()
+    probe.thumbnail((1400, 1400))
+    osd = _osd_rotation(probe)
+    if osd:
+        image = image.rotate(osd, expand=True)
+        probe = _probe(image)
+        notes.append(f"rotated{osd}")
+    first = _ocr_image(probe, 1, 1)
+    q0 = _quality(first)
+    words = sum(len(l.words) for l in first)
+    if osd is None and (words == 0 or q0 / max(words, 1) < 0.85):
+        best_angle, best_q = 0, q0
+        for angle in (180, 90, 270):
+            q = _quality(_ocr_image(probe.rotate(angle, expand=True), 1, 1))
+            if q > best_q * 1.6:
+                best_angle, best_q = angle, q
+        if best_angle:
+            image = image.rotate(best_angle, expand=True)
+            notes.append(f"rotated{best_angle}")
+    angle = _deskew(image)
+    if abs(angle) >= 0.7:
+        # keep the correction only if it actually reads better (pictures and QR codes can fool the profile)
+        before = q0 if not notes else _quality(_ocr_image(_probe(image), 1, 1))
+        turned = image.rotate(angle, expand=True, fillcolor="white", resample=3)
+        if _quality(_ocr_image(_probe(turned), 1, 1)) > before * 1.03:
+            image = turned
+            notes.append(f"deskew{angle:+.1f}")
+    return image, notes
+
+
+def _osd_rotation(image) -> Optional[int]:
+    """Tesseract's orientation detection (osd.traineddata). Returns the counter-clockwise rotation to
+    apply (0/90/180/270), or None when OSD is unavailable or unsure."""
+    import re
+
+    with tempfile.TemporaryDirectory() as tmp:
+        src = Path(tmp) / "p.png"
+        image.convert("L").save(src)
+        try:
+            out = subprocess.run([tesseract_cmd(), str(src), "stdout", "--psm", "0"], capture_output=True, text=True,
+                                 timeout=60, env=_tess_env())
+        except Exception:
+            return None
+    m = re.search(r"Rotate: (\d+)", out.stdout)
+    c = re.search(r"Orientation confidence: ([\d.]+)", out.stdout)
+    if not m or not c or float(c.group(1)) < 1.5:
+        return None
+    rot = int(m.group(1)) % 360
+    # Tesseract reports the clockwise rotation needed; PIL rotates counter-clockwise.
+    return (360 - rot) % 360 if rot else 0
+
+
+def _probe(image):
+    p = image.copy()
+    p.thumbnail((1400, 1400))
+    return p
 
 
 def _pdf_lines(page, page_no: int, start: int) -> list[Line]:

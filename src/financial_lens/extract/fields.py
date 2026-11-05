@@ -196,7 +196,11 @@ def extract(result: TextResult) -> Extracted:
                      and not AMOUNT_RE.search(l.text) and not any(True for _ in _dates(l))), None)
         base = 0.55
     if pick is not None:
-        ex.counterparty = Field(pick.text.strip(" ,:"), pick.number, pick.text, _conf(pick, base), method)
+        name = pick.text.strip(" ,:")
+        m = LEGAL_FORMS.search(name)
+        if m:  # nothing after the legal form belongs to the name (stray marks, page numbers)
+            name = name[:m.end()].rstrip(" ,")
+        ex.counterparty = Field(name, pick.number, pick.text, _conf(pick, base), method)
 
     for line in lines:
         m = IBAN_RE.search(line.text.replace("-", " "))

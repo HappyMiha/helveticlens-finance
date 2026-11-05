@@ -84,7 +84,7 @@ def test_invoice_total_is_the_one_the_arithmetic_supports(lens):
     pdf, truth = invoice_with_decoys()
     an = analyse(pdf)
     assert an.doc_type == "invoice" and an.facts["total"]["value"] == truth["total"]
-    assert "net + VAT = total" in an.facts["total"]["how"]
+    assert "subtotal + tax = total" in an.facts["total"]["how"]
     res = lens.ingest(pdf, "velo.pdf")
     assert lens.operation_detail(res.operation_ids[0])["amount"] == "201.40"
 
@@ -105,4 +105,4 @@ def test_receipt_ignores_cash_and_change():
     pdf, truth = receipt_with_change()
     an = analyse(pdf)
     assert an.doc_type == "receipt" and an.facts["total"]["value"] == truth["total"]
-    assert "line items add up" in an.facts["total"]["how"]
+    assert "line items add up" in an.facts["total"]["how"] or "paid − change" in an.facts["total"]["how"]

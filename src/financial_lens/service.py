@@ -200,6 +200,28 @@ class FinancialLens:
         if self.ai is not None:
             self.ai.level = level
 
+    def ai_assist(self) -> bool:
+        """Model assistance is a switch; off means rules and arithmetic only."""
+        if self.ai is None:
+            return False
+        row = self.db.execute("SELECT value FROM settings WHERE organization_id=%s AND key='ai_assist'", (self.org,)).fetchone()
+        return bool(row["value"]) if row else True
+
+    def set_ai_assist(self, on: bool) -> None:
+        self.authorize("configure")
+        with self.db.transaction():
+            self.db.execute("INSERT INTO settings VALUES (%s,'ai_assist',%s) ON CONFLICT (organization_id, key) "
+                            "DO UPDATE SET value=EXCLUDED.value, updated_at=now()", (self.org, Jsonb(bool(on))))
+            self._audit("ai_assist", "organization", self.org, {"on": bool(on)})
+
+    def use_local_model(self, base_url: str = "http://127.0.0.1:18765/v1", model: str = "apertus-8b",
+                        name: str = "Apertus 8B (local)") -> None:
+        """Attach a model running on this machine (llama.cpp / Ollama, OpenAI-compatible API)."""
+        from .ai.providers import OpenAICompatible, Orchestrator
+
+        p = OpenAICompatible(name, base_url, model, "local", timeout=300)
+        self.attach_ai(Orchestrator(routes={t: [p] for t in ("understand", "extract", "classify", "parse_question")}))
+
     def attach_ai(self, orchestrator) -> None:
         """Connect a model orchestrator: it logs into AI Activity and asks each document's privacy setting."""
         orchestrator.level = self.privacy_level()
@@ -486,7 +508,7 @@ class FinancialLens:
 
     def _process_document(self, doc: str, data: bytes, media_type: str) -> IngestResult:
         text = ocr.recognise(data, media_type)
-        an = understand.analyse(text)
+        an = understand.analyse(text, model=self.ai if self.ai_assist() else None, document_id=doc)
         if an.doc_type == "bank_statement" and an.rows:
             return self._import_statement_document(doc, text, an)
         if an.doc_type == "payslip":
@@ -530,8 +552,15 @@ class FinancialLens:
                 weakest = ex.weakest
                 structured = ex.amount.method == "qr-bill"
                 doubts = []
-                if not structured and weakest < 0.75:
-                    doubts.append(f"lowest field confidence {weakest:.0%}")
+                # Money and date decide whether a record can be trusted; a slightly blurry name does not
+                # (it is checked again against the bank payment).
+                money_conf = min(f.confidence for f in (ex.amount, ex.doc_date))
+                if an.consistent and ex.amount.method in ("arithmetic", "qr-bill"):
+                    money_conf = max(money_conf, ex.doc_date.confidence)
+                if not structured and money_conf < 0.75:
+                    doubts.append(f"amount or date read with low confidence ({money_conf:.0%})")
+                if ex.counterparty and ex.counterparty.confidence < 0.55:
+                    doubts.append(f"counterparty unclear (“{ex.counterparty.value}”)")
                 if ex.currency is None:
                     doubts.append("currency not printed; CHF assumed")
                 if sug.path == ("Unclassified",):

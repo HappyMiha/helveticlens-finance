@@ -20,13 +20,21 @@ from typing import Optional
 
 from .ocr import Line, TextResult
 
-TOL = Decimal("0.05")  # Swiss rounding to 5 Rappen
+TOL = Decimal("0.005")  # sums must match to the cent; OCR misreads must not hide behind a tolerance
+
+
+def near_total(computed: Decimal, total: Decimal) -> bool:
+    """A printed total may be rounded to 5 Rappen (Swiss cash rounding) — but only if it is itself a
+    multiple of 0.05; otherwise the sum must match exactly."""
+    if (total * 100) % 5 == 0:
+        return abs(computed - total) <= Decimal("0.025")
+    return abs(computed - total) <= TOL
 
 # ------------------------------------------------------------------ tokens
 # 1'234.50  1’234.50  1 234,50  1.234,50  1234.50  -12.30  12.30-  (12.30)  12.–
 MONEY_RE = re.compile(
     r"(?<![\w.,'’/])(?P<neg1>[-−–]\s?)?(?P<open>\()?"
-    r"(?P<int>\d{1,3}(?:['’  .]\d{3})+|\d+)(?:(?P<sep>[.,])(?P<dec>\d{2}|[-–]{1,2}))"
+    r"(?P<int>\d{1,3}(?:['’ \u202f.]\d{3})+|\d{1,3}(?:,\d{3})+(?=\.\d\d)|\d+)(?:(?P<sep>[.,])(?P<dec>\d{2}|[-–]{1,2}))"
     r"(?P<close>\))?(?P<neg2>-)?(?![\d%])(?!\s?%)(?![./]\d)")
 DATE_RE = re.compile(r"(?<![\d'’])(\d{1,2})[./](\d{1,2})(?:[./]((?:19|20)?\d{2})?)?(?![\d'’]|[.,]\d)")
 PERCENT_RE = re.compile(r"\d+(?:[.,]\d+)?\s?%")
@@ -46,6 +54,8 @@ def money_tokens(line: Line) -> list[Money]:
     text = line.text
     for m in MONEY_RE.finditer(text):
         intpart = re.sub(r"['’  ]", "", m.group("int"))
+        if "," in intpart:  # 6,500.00 (English thousands separator)
+            intpart = intpart.replace(",", "")
         sep, dec = m.group("sep"), m.group("dec")
         if "." in intpart and sep == ",":  # 1.234,50
             intpart = intpart.replace(".", "")
@@ -167,7 +177,8 @@ SIGNALS = {
                 (r"zahlteil|empfangsschein|section paiement|récépissé|ricevuta|qr-?rechnung", 2),
                 (r"\biban\b|referenz|référence|riferimento", 1)],
     "receipt": [(r"quittung|kassenbon|kassenzettel|reçu|ticket de caisse|scontrino|receipt", 4),
-                (r"bar\b|karte|card|carte|twint|rückgeld|rendu|resto|change", 2),
+                (r"bar\b|karte|card|carte|twint|rückgeld|rendu|resto|change|cash|tender", 2),
+                (r"\bqty\b|menge|anzahl|quantité|quantità|subtotal|sub total|zwischentotal", 1),
                 (r"mwst|tva|iva|vat", 1),
                 (r"vielen dank|merci|grazie|thank you", 1)],
 }
@@ -198,11 +209,15 @@ def classify(lines: list[Line]) -> tuple[str, float, list[str]]:
 
 # ------------------------------------------------------------------ payslip
 PAYSLIP_ROLES = [  # order matters: the first matching role wins
-    ("net", r"^(total )?(netto ?lohn|salaire net|salario netto|net (salary|pay)|nettolohn|netto)\b"),
-    ("payout", r"auszahlung|auszahlungsbetrag|zahlbetrag|montant vers[ée]|versement|importo versato|net payment|überweisung"),
-    ("gross", r"brutto ?lohn|total brutto|bruttolohn|salaire brut|total brut|salario lordo|gross (salary|pay)|^brutto\b"),
-    ("total_deductions", r"total (abzüge|sozialabzüge|déductions|deduzioni|deductions)|abzüge total|total des retenues"),
-    ("deduction", r"\bahv\b|\biv\b|\beo\b|\bavs\b|\bai\b|\bapg\b|\balv\b|\bac\b|\bbvg\b|\blpp\b|pensionskasse|caisse de pension|"
+    ("net", r"^(total )?(netto ?(lohn|gehalt)|salaire net|salario netto|net (salary|pay)|netto)\b"),
+    ("payout", r"auszahlung|auszahlungsbetrag|zahlbetrag|montant vers[ée]|versement|importo versato|net payment|payout|"
+               r"amount paid|überweisung"),
+    ("gross", r"brutto ?(lohn|gehalt)|total brutto|gesamtbrutto|lohn brutto|salaire brut|total brut|salario lordo|"
+              r"gross (salary|pay)|^brutto\b"),
+    ("total_deductions", r"totale? (des )?(abzüge|sozialabzüge|déductions|deduzioni|trattenute|deductions|retenues)|"
+                         r"(sozial)?abzüge total"),
+    ("deduction", r"versicherung|assurance|assicurazione|insurance|cotisation|beitrag|contributo|contribution|"
+                  r"social security|pension fund|unemployment|\bad\b|\bainp\b|\bipg\b|cassa pensione|\bahv\b|\biv\b|\beo\b|\bavs\b|\bai\b|\bapg\b|\balv\b|\bac\b|\bbvg\b|\blpp\b|pensionskasse|caisse de pension|"
                   r"\bnbu\b|\baanp\b|\bktg\b|\bijm\b|krankentaggeld|unfall|accident|quellensteuer|impôt à la source|"
                   r"imposta alla fonte|withholding tax|\bfak\b|parkplatz|abzug|retenue|deduzione"),
     ("allowance_after", r"spesen|frais|spese|expenses|pauschalspesen"),
@@ -238,26 +253,53 @@ def _period(lines: list[Line]) -> Optional[tuple[int, int]]:
     return None
 
 
-def analyse_payslip(lines: list[Line], a: Analysis) -> Analysis:
+def analyse_payslip(lines: list[Line], a: Analysis, roles: Optional[dict] = None) -> Analysis:
+    """roles: optional {line number: (role, amount)} proposed by a model; the arithmetic below decides."""
     found: dict[str, list[tuple[Decimal, Line]]] = {}
+    unlabelled: list[tuple[Decimal, Line]] = []
     for l in lines:
         amounts = money_tokens(l)
         if not amounts:
             continue
-        lab = label_of(l)
+        if roles is not None:
+            if l.number not in roles:
+                continue
+            role, value = roles[l.number]
+            found.setdefault(role, []).append((value, l))
+            continue
+        lab = re.sub(r"[-/]", " ", label_of(l))
         if not lab:
             continue
         role = next((r for r, p in PAYSLIP_ROLES if re.search(p, lab)), None)
-        if role is None:
-            continue
         value = amounts[-1].value  # the amount column is the rightmost; rates and bases sit to its left
+        if role is None:
+            unlabelled.append((value, l))
+            continue
         found.setdefault(role, []).append((value, l))
+    # Structure: an unlabelled negative amount between gross and net is a deduction; an unlabelled
+    # positive amount between the deductions and net is something added after deductions.
+    if roles is None and unlabelled:
+        g_line = (found.get("gross") or [(None, None)])[-1][1]
+        n_line = (found.get("net") or found.get("payout") or [(None, None)])[0][1]
+        last_ded = max((l.number for _, l in found.get("deduction", []) + found.get("total_deductions", [])), default=None)
+        for v, l in unlabelled:
+            if g_line and n_line and g_line.number < l.number < n_line.number:
+                if v < 0:
+                    found.setdefault("deduction", []).append((v, l))
+                elif last_ded and l.number > last_ded:
+                    found.setdefault("earning", []).append((v, l))
 
     def one(role):
         items = found.get(role, [])
         return items[-1] if items else None  # totals tend to be printed after their items
 
     gross, net, payout = one("gross"), one("net"), one("payout")
+    # Completeness: an amount after the gross salary that no role explains could change the result.
+    used = {l.number for items in found.values() for _, l in items}
+    g_no = gross[1].number if gross else 0
+    stray = [l for v, l in unlabelled if l.number > g_no and l.number not in used]
+    if stray:
+        a.problems.append("Amounts that could not be assigned: " + "; ".join(l.text[:50] for l in stray[:4]))
     deductions = found.get("deduction", [])
     earnings = found.get("earning", [])
     after = found.get("allowance_after", [])
@@ -301,7 +343,7 @@ def analyse_payslip(lines: list[Line], a: Analysis) -> Analysis:
         computed = abs(gross[0]) - ded_sum
         a.facts["net"] = {"value": computed, "line": None, "quote": "", "how": "computed: gross − deductions"}
         a.problems.append("No net salary printed; it was computed from gross and deductions — please check.")
-    if payout and (net or gross):
+    if payout and (net or "net" in a.facts):
         base = abs(net[0]) if net else a.facts["net"]["value"]
         extra = sum((abs(v) for v, _ in after), Decimal(0))
         a.checks.append(Check("net + expenses = payout", abs(base + extra - abs(payout[0])) <= TOL,
@@ -328,6 +370,82 @@ def analyse_payslip(lines: list[Line], a: Analysis) -> Analysis:
         y, m = per
         last = (date(y + (m == 12), m % 12 + 1, 1) - date.resolution)
         a.facts["date"] = {"value": last, "line": None, "quote": "", "how": "last day of the pay period"}
+    return a
+
+
+def solve_payslip(lines: list[Line], a: Analysis) -> Optional[Analysis]:
+    """Find the roles from the arithmetic alone, without knowing any label:
+    gross, a block of deductions (optionally followed by its total), items added afterwards, the net,
+    and items between net and payout. Accepted only if exactly one reading explains every amount
+    after the gross salary."""
+    seq = [(l, abs(money_tokens(l)[-1].value)) for l in lines if money_tokens(l)]
+    n = len(seq)
+    sols = []
+    for i in range(n):
+        g = seq[i][1]
+        for k in range(i + 3, n):  # at least two deductions between gross and net
+            block = seq[i + 1:k]
+            for with_total in (True, False):
+                deds, total = (block[:-1], block[-1]) if with_total else (block, None)
+                if len(deds) < 2:
+                    continue
+                dsum = sum((v for _, v in deds), Decimal(0))
+                if total is not None and abs(dsum - total[1]) > TOL:
+                    continue
+                for extra in range(0, 3):  # items added after the deductions, before the net line
+                    if k + extra >= n:
+                        break
+                    adds = seq[k:k + extra]
+                    net = seq[k + extra]
+                    if abs(g - dsum + sum((v for _, v in adds), Decimal(0)) - net[1]) > TOL:
+                        continue
+                    rest = seq[k + extra + 1:]
+                    payout, mids = None, []
+                    for m in range(len(rest) - 1, -1, -1):  # payout = net + items in between
+                        between = rest[:m]
+                        if abs(net[1] + sum((v for _, v in between), Decimal(0)) - rest[m][1]) <= TOL:
+                            payout, mids = rest[m], between
+                            break
+                    tail = rest[(len(mids) + 1) if payout else 0:]
+                    if tail:
+                        continue  # some amount after the net would remain unexplained
+                    before = seq[:i]
+                    sols.append(dict(g=seq[i], deds=deds, total=total, adds=adds, net=net, mids=mids, payout=payout,
+                                     before=before))
+    if not sols:
+        return None
+    # identical numeric readings (e.g. base salary = gross) count once
+    keys = {(s["g"][0].number, s["net"][0].number, (s["payout"] or (None,))[0] and s["payout"][0].number) for s in sols}
+    if len(keys) != 1:
+        a.problems.append(f"The arithmetic allows {len(keys)} different readings; please check.")
+        return None
+    s = sols[-1]
+    how = "structure: the arithmetic identifies the role"
+    a.facts["gross"] = fact(s["g"][1], s["g"][0], how)
+    a.facts["deductions"] = [fact(v, l, how) for l, v in s["deds"]]
+    a.facts["earnings"] = [fact(v, l, how) for l, v in s["adds"]]
+    a.facts["net"] = fact(s["net"][1], s["net"][0], how)
+    a.facts["allowances_after_net"] = [fact(v, l, how) for l, v in s["mids"]]
+    if s["payout"]:
+        a.facts["payout"] = fact(s["payout"][1], s["payout"][0], how)
+    dsum = sum((v for _, v in s["deds"]), Decimal(0))
+    a.checks.append(Check("gross − deductions (+ additions) = net", True,
+                          f"{s['g'][1]} − {dsum} + {sum((v for _, v in s['adds']), Decimal(0))} = {s['net'][1]}"))
+    if s["total"]:
+        a.checks.append(Check("deductions add up to their total", True, f"{dsum} = {s['total'][1]}"))
+    if s["payout"]:
+        a.checks.append(Check("net + items = payout", True, f"{s['net'][1]} → {s['payout'][1]}"))
+    a.checks.append(Check("every amount after gross is explained", True, "unique reading"))
+    employer = next((l for l in lines[:12] if LEGAL.search(l.text) and not money_tokens(l)), None)
+    if employer:
+        a.facts["employer"] = fact(employer.text.strip(), employer, "legal form in the header")
+    per = _period(lines)
+    if per:
+        a.facts["period"] = {"value": f"{per[0]}-{per[1]:02d}", "line": None, "quote": "", "how": "month in the header"}
+    dated = [(dates_in(l.text), l) for l in lines]
+    dated = [(d[0], l) for d, l in dated if d]
+    if dated:
+        a.facts["date"] = fact(dated[-1][0], dated[-1][1], "last date on the payslip")
     return a
 
 
@@ -443,9 +561,17 @@ def analyse_statement(lines: list[Line], a: Analysis) -> Analysis:
                     amt, how = amt_tok, "no opening balance to determine the sign"
             else:
                 amt, how = toks[-1].value, "single amount without column or balance"
+        if amt is None and bal is not None and prev_balance is not None and len(toks) >= 2:
+            # the column of the amount was unclear (skewed scan): the balance change decides
+            cand = [t.value for t in toks if t.value != bal]
+            delta = bal - prev_balance
+            if cand and any(abs(abs(c) - abs(delta)) <= TOL for c in cand):
+                amt, how = delta, "sign from the change in balance"
         if amt is not None and bal is not None and prev_balance is not None and how.endswith("column"):
             ok = abs(prev_balance + amt - bal) <= TOL
-            if not ok:
+            if not ok and abs(prev_balance - amt - bal) <= TOL:
+                amt, how = -amt, "sign from the change in balance"  # amount sat between two columns
+            elif not ok:
                 how += "; balance does not follow"
         if bal is not None:
             prev_balance = bal
@@ -484,67 +610,216 @@ def analyse_statement(lines: list[Line], a: Analysis) -> Analysis:
 
 
 # ---------------------------------------------------------- invoice / receipt
-TOTAL = r"zu bezahlen|total|summe|gesamt|endbetrag|rechnungsbetrag|montant|à payer|a payer|totale|importo|amount due|betrag"
-NET = r"netto|zwischentotal|subtotal|sous-total|sous total|imponibile|total exkl|total hors|excl\.?|ohne mwst|ht\b"
-VAT = r"mwst|mehrwertsteuer|tva|iva|vat"
-NOT_TOTAL = r"rabatt|skonto|remise|sconto|discount|rückgeld|rendu|resto|change|gegeben|bar\b|erhalten|tip|trinkgeld"
+TOTAL = r"zu bezahlen|total|summe|gesamt|endbetrag|rechnungsbetrag|montant|à payer|a payer|totale|importo|amount due|" \
+        r"betrag|payable|amount"
+NET = r"netto|zwischentotal|subtotal|sub total|sous-total|sous total|imponibile|total exkl|total hors|excl\.?|excluded|" \
+      r"ohne mwst|\bht\b"
+VAT = r"mwst|mehrwertsteuer|tva|iva|vat|gst|sst|\btax\b|steuer"
+INCLUDED = r"inkl|incl|inclu|inciu|compris|enthalten|included"
+PAID = r"\bbar\b|cash|tender|bezahlt|gegeben|erhalten|espèces|contanti|paid|karte|card|twint|visa|mastercard"
+CHANGE = r"rückgeld|rueckgeld|change|rendu|resto|monnaie"
+NOT_TOTAL = r"rabatt|skonto|remise|sconto|discount|tip|trinkgeld|rounding|rundung|arrondi|qty|menge|anzahl"
 
 
-def analyse_invoice(lines: list[Line], a: Analysis) -> Analysis:
-    totals, nets, vats, items = [], [], [], []
+def analyse_invoice(lines: list[Line], a: Analysis, roles: Optional[dict] = None) -> Analysis:
+    """The total is the printed amount that the other printed amounts prove: subtotal + tax,
+    items (+ tax), amount paid − change, or the stated VAT rate. Labels help, arithmetic decides —
+    so an OCR-garbled 'TOTAL' still works, and a 'Total incl. VAT 2.20' line is not taken for the total."""
+    entries = []  # (value, line, kind) using the rightmost amount of each line
     for l in lines:
         toks = money_tokens(l)
         if not toks:
             continue
         lab = label_of(l)
-        v = toks[-1].value
-        if re.search(NET, lab):
-            nets.append((v, l))
-        elif re.search(VAT, lab) and not re.search(r"inkl|incl|compris|inclus", lab):
-            vats.append((v, l))
-        elif re.search(TOTAL, lab) and not re.search(NOT_TOTAL, lab):
-            totals.append((v, l))
-        elif re.search(VAT, lab):  # "inkl. MWST 8.1% 13.80" states VAT inside the total
-            vats.append((v, l))
-        elif lab and not re.search(NOT_TOTAL, lab) and not dates_in(l.text, 2000) and len(lab) > 2:
-            items.append((v, l))
-    # Choose the total that the other numbers support.
-    best, why = None, ""
-    for v, l in sorted(totals, key=lambda t: -abs(t[0])):
+        v = abs(toks[-1].value)
+        if roles is not None:
+            kind = roles.get(l.number, (None,))[0]
+            if kind:
+                entries.append((roles[l.number][1].copy_abs(), l, kind))
+            continue
+        pct = PERCENT_RE.search(l.text)
+        if re.search(VAT, lab) and (re.search(INCLUDED, lab) or pct or not re.search(TOTAL, lab)):
+            kind = "vat"
+        elif re.search(NET, lab):
+            kind = "net"
+        elif re.search(CHANGE, lab):
+            kind = "change"
+        elif re.search(PAID, lab):
+            kind = "paid"
+        elif re.search(NOT_TOTAL, lab):
+            kind = "other"
+        elif re.search(TOTAL, lab):
+            kind = "total"
+        elif lab and not dates_in(l.text, 2000) and len(lab) > 2:
+            kind = "item"
+        else:
+            kind = "other"
+        entries.append((v, l, kind))
+
+    def of(kind):
+        return [(v, l) for v, l, k in entries if k == kind]
+
+    vats, nets, items, paid, change = of("vat"), of("net"), of("item"), of("paid"), of("change")
+    rate_of = {}
+    for v, l in vats:
+        m = re.search(r"(\d+(?:[.,]\d+)?)\s?%", l.text)
+        if m:
+            rate_of[l.number] = Decimal(m.group(1).replace(",", ".")) / 100
+    candidates = {}
+    for v, l, k in entries:
+        if k in ("total", "net", "item", "paid") and v > 0:
+            candidates.setdefault(v, []).append((l, k))
+    results = []
+    for T, where in candidates.items():
         reasons = []
-        if any(abs(n + x - v) <= TOL for n, _ in nets for x, _ in vats):
-            reasons.append("net + VAT = total")
-        if any(abs(x - v * r / (1 + r)) <= TOL for x, _ in vats for r in (Decimal("0.081"), Decimal("0.026"), Decimal("0.038"))):
-            reasons.append("VAT is the Swiss rate of the total")
-        s = sum((i for i, _ in items), Decimal(0))
-        if items and abs(s - v) <= TOL:
-            reasons.append(f"{len(items)} line items add up")
-        elif items and any(abs(s + x - v) <= TOL for x, _ in vats):
-            reasons.append(f"{len(items)} line items + VAT = total")
-        if reasons and (best is None or len(reasons) > len(why)):
-            best, why = (v, l), reasons
-    if best is None and totals:
-        # no arithmetic support: prefer the last explicit total line, but say so
-        best, why = totals[-1], []
-        a.problems.append("The total could not be confirmed by VAT or line items.")
-    if best:
-        a.facts["total"] = fact(abs(best[0]), best[1], "; ".join(why) if why else "total label")
-        a.checks.append(Check("total supported by the other amounts", bool(why), "; ".join(why) or "no supporting amounts"))
-    else:
+        if any(near_total(n + x, T) for n, _ in nets for x, _ in vats if n < T):
+            reasons.append("subtotal + tax = total")
+        before = [(v, l) for v, l in items if l.number < max(w.number for w, _ in where)]
+        s_items = sum((v for v, _ in before), Decimal(0))
+        if len(before) >= 2 and near_total(s_items, T):
+            reasons.append(f"{len(before)} line items add up")
+        elif len(before) >= 2 and any(near_total(s_items + x, T) for x, _ in vats):
+            reasons.append(f"{len(before)} line items + tax = total")
+        if change and any(abs(p - c - T) <= TOL and c > 0 for p, _ in paid for c, _ in change):
+            reasons.append("amount paid − change = total")
+        elif change and any(abs(p - T) <= TOL for p, _ in paid):
+            reasons.append("(approx.) paid exactly the total, no change")  # same digits twice: not independent
+        elif paid and not change and any(abs(p - T) <= TOL for p, _ in paid):
+            reasons.append("amount paid equals the total")
+        for x, l in vats:
+            r = rate_of.get(l.number)
+            if r and (abs(x - (T * r / (1 + r))) <= Decimal("0.02") * 2 or any(abs(x - n * r) <= TOL * 2 and abs(n + x - T) <= TOL for n, _ in nets)):
+                reasons.append(f"(approx.) tax {x} is {r * 100:.1f} % of the total")
+                break
+        labelled = any(k == "total" for _, k in where)
+        if not reasons and not labelled:
+            continue
+        strong_n = sum(1 for r in reasons if not r.startswith("(approx.)"))
+        results.append((strong_n + 0.25 * (len(reasons) - strong_n) + (0.5 if labelled else 0), T, where, reasons, labelled))
+    results.sort(key=lambda r: (-r[0], -r[1]))
+    if not results:
         a.problems.append("No total amount found.")
-    if len({abs(v) for v, _ in totals}) > 1 and not why:
-        a.problems.append("Several different totals are printed: " + ", ".join(str(abs(v)) for v, _ in totals[:4]))
+        return a
+    best = results[0]
+    tied = [r for r in results[1:] if r[0] == best[0] and r[1] != best[1]]
+    line = next((l for l, k in best[2] if k == "total"), best[2][0][0])
+    a.facts["total"] = fact(best[1], line, "; ".join(best[3]) if best[3] else "total label")
+    # A rate check is approximate (rounding), so on its own it never confirms a total.
+    strong = [r for r in best[3] if not r.startswith("(approx.)")]
+    supported = bool(strong) and (best[4] or len(strong) >= 2)
+    # Evidence against: printed line items that add up to neither the total nor total − tax.
+    t_line = line.number
+    before = [v for v, l in items if l.number < t_line]
+    if supported and len(before) >= 2 and not any("line items" in r or "subtotal" in r for r in strong):
+        s_items = sum(before, Decimal(0))
+        if not (near_total(s_items, best[1]) or any(near_total(s_items + x, best[1]) for x, _ in vats)):
+            supported = False
+            a.problems.append(f"The line items add up to {s_items}, which does not match the total {best[1]}.")
+    a.checks.append(Check("total supported by the other amounts", supported,
+                          "; ".join(best[3]) if best[3] else "no other printed amount confirms it"))
+    if tied:
+        a.problems.append("Another amount fits equally well: " + ", ".join(str(r[1]) for r in tied[:3]))
+    if not best[3]:
+        a.problems.append("The total could not be confirmed by tax, line items or payment.")
     return a
 
 
-def analyse(result: TextResult) -> Analysis:
+def analyse_rules(result: TextResult) -> Analysis:
     kind, score, evidence = classify(result.lines)
     a = Analysis(kind, score, evidence)
     if kind == "payslip":
-        return analyse_payslip(result.lines, a)
+        a = analyse_payslip(result.lines, a)
+        if not a.consistent:
+            solved = solve_payslip(result.lines, Analysis(kind, score, evidence + ["roles from arithmetic"]))
+            if solved is not None and solved.consistent:
+                return solved
+        return a
     if kind == "bank_statement":
         return analyse_statement(result.lines, a)
     if kind in ("invoice", "receipt"):
         return analyse_invoice(result.lines, a)
     a.problems.append("Document type not recognised.")
     return a
+
+
+# --------------------------------------------------------- model assistance
+ROLE_SETS = {
+    "payslip": {"gross", "deduction", "total_deductions", "earning", "allowance_after", "net", "payout"},
+    "invoice": {"total", "net", "vat", "item"}, "receipt": {"total", "net", "vat", "item"},
+}
+MODEL_PROMPT = """You read a Swiss financial document line by line. Return JSON only:
+{"doc_type": "payslip" | "bank_statement" | "invoice" | "receipt" | "other",
+ "roles": [{"line": <line number>, "role": <role>, "amount": "<amount exactly as printed on that line>"}]}
+Roles for a payslip: gross, earning (salary items that make up gross), deduction (AHV/IV/EO, ALV, BVG, NBU,
+withholding tax, other deductions), total_deductions, allowance_after (added after deductions, e.g. child
+allowance or expenses), net, payout. Roles for an invoice or receipt: item, net (total before VAT), vat, total.
+Only list lines that carry one of these amounts. Copy amounts exactly; never compute or invent numbers.
+For a bank statement return only the doc_type."""
+
+
+def _model_roles(model, result: TextResult, document_id) -> tuple[Optional[str], dict, str]:
+    import json
+
+    numbered = "\n".join(f"L{l.number}: {l.text}" for l in result.lines[:220])
+    answer = model.run("understand", MODEL_PROMPT, numbered, document_id=document_id, validate=lambda x: "{" in x)
+    if not answer:
+        return None, {}, "the model gave no answer"
+    try:
+        data = json.loads(answer[answer.find("{"): answer.rfind("}") + 1])
+    except ValueError:
+        return None, {}, "the model's answer was not valid JSON"
+    by_no = {l.number: l for l in result.lines}
+    roles, rejected = {}, 0
+    for r in data.get("roles") or []:
+        try:
+            n = int(str(r.get("line", "")).lstrip("Ll"))
+            role = str(r.get("role", ""))
+            line = by_no[n]
+        except (ValueError, KeyError):
+            rejected += 1
+            continue
+        claimed = str(r.get("amount", "")).strip()
+        # The amount must literally be one of the amounts printed on that line.
+        match = next((t for t in money_tokens(line) if t.raw.lstrip("-") == claimed.lstrip("-")
+                      or str(abs(t.value)) == claimed.lstrip("-").replace("'", "").replace("’", "")), None)
+        if match is None:
+            rejected += 1
+            continue
+        roles[n] = (role, match.value)
+    kind = data.get("doc_type")
+    note = f"model proposed {len(roles)} roles" + (f", {rejected} rejected (not printed on the line)" if rejected else "")
+    return (kind if kind in ("payslip", "bank_statement", "invoice", "receipt") else None), roles, note
+
+
+def analyse(result: TextResult, model=None, document_id=None) -> Analysis:
+    """Rules and arithmetic first. A model (e.g. local Apertus) is asked only when the rules are not sure;
+    its proposal is accepted only if the document's arithmetic then reconciles."""
+    base = analyse_rules(result)
+    if model is None or base.consistent:
+        return base
+    kind, roles, note = _model_roles(model, result, document_id)
+    kind = kind or base.doc_type
+    if kind == "payslip":
+        solved = solve_payslip(result.lines, Analysis("payslip", 0.7, [f"document type from the model ({note})",
+                                                                      "roles from arithmetic"]))
+        if solved is not None and solved.consistent:
+            solved.facts["assisted_by_model"] = True
+            return solved
+    if kind == "bank_statement" and base.doc_type != "bank_statement":
+        alt = analyse_statement(result.lines, Analysis(kind, 0.7, ["document type proposed by the model"]))
+    elif kind in ROLE_SETS and roles:
+        roles = {n: r for n, r in roles.items() if r[0] in ROLE_SETS[kind]}
+        alt = Analysis(kind, 0.7, ["roles proposed by the model, arithmetic checked by code"])
+        alt = analyse_payslip(result.lines, alt, roles) if kind == "payslip" else analyse_invoice(result.lines, alt, roles)
+    else:
+        base.problems.append(f"Model consulted: {note}; nothing usable.")
+        return base
+    if alt.consistent:
+        alt.type_evidence.append(note)
+        for f in alt.facts.values():
+            if isinstance(f, dict) and "how" in f:
+                f["how"] = f"{f['how']} (role by model, arithmetic verified)"
+        alt.facts["assisted_by_model"] = True
+        return alt
+    base.problems.append(f"Model consulted ({note}), but its reading does not reconcile either.")
+    return base

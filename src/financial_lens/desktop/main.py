@@ -285,6 +285,12 @@ class MainWindow(QMainWindow):
         bar.addAction(add)
         bar.addAction(pair)
         bar.addAction(mail)
+        self.ai_action = QAction("AI assist: Apertus (local)", self)
+        self.ai_action.setCheckable(True)
+        self.ai_action.setToolTip("Ask the local Apertus model when the rules are not sure. Its reading is accepted only "
+                                  "if the document's arithmetic then reconciles. Nothing leaves this computer.")
+        self.ai_action.toggled.connect(self.toggle_ai)
+        bar.addAction(self.ai_action)
 
         self.stack.addWidget(self._overview())
         self.inbox = table(["Type", "Item", "Status", "Reason"])
@@ -562,6 +568,26 @@ class MainWindow(QMainWindow):
         fill(self.inbox, [["Proposed link", f"{p['counterparty']} · {chf(p['amount'])}", "proposed", "; ".join(p["reasons"])]
                           for p in proposed] + [["Document", d["filename"], d["processing_status"], d["doc_type"]] for d in review],
              [("link", str(p["id"])) for p in proposed] + [("doc", d["id"]) for d in review])
+
+    # ---------------------------------------------------- AI assist
+    def toggle_ai(self, on: bool) -> None:
+        import urllib.request
+
+        url = os.environ.get("FL_MODEL_URL", "http://127.0.0.1:18765/v1")
+        if on:
+            try:
+                urllib.request.urlopen(url.rstrip("/") + "/models", timeout=3).read()
+            except Exception:
+                self.ai_action.blockSignals(True)
+                self.ai_action.setChecked(False)
+                self.ai_action.blockSignals(False)
+                QMessageBox.information(self, "AI assist", "The local Apertus model is not running.\n\nStart it with "
+                                        "packaging/apertus.sh (needs Docker; downloads about 5 GB once), then switch AI "
+                                        "assist on again. Without it, Financial Lens uses its rules and arithmetic only.")
+                return
+            self.lens.use_local_model(url)
+        if self.lens.ai is not None:
+            self.lens.set_ai_assist(on)
 
     # ---------------------------------------------------- manual entry
     def add_record_dialog(self) -> None:
