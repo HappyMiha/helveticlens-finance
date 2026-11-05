@@ -96,4 +96,4 @@ jobs:
         run: |
           gh release create "${{ github.ref_name }}" --repo "${{ github.repository }}" --title "Financial Lens ${{ github.ref_name }}" \
             --notes "Desktop installers for Linux (AppImage), Windows (installer) and macOS (Apple silicon). Each build passed its self-test (OCR, embedded PostgreSQL, matching, window). The builds are not code-signed yet: Windows SmartScreen and macOS Gatekeeper will ask for confirmation on first start." \
-            out/FinancialLens-x86_64.AppImage out/FinancialLens-Setup-x64.exe out/FinancialLens-macOS-arm64.dmg
+            out/dist/FinancialLens-x86_64.AppImage out/dist/FinancialLens-Setup-x64.exe out/dist/FinancialLens-macOS-arm64.dmg
