@@ -26,6 +26,7 @@ from psycopg.types.json import Jsonb
 from .classify.rules import DEFAULT_TREE, classify
 from .domain.money import MINOR_UNITS
 from .extract import fields as fx
+from .extract import understand
 from .extract import ocr
 from .ingest import camt053, tabular
 from .store.files import OriginalStore
@@ -485,11 +486,25 @@ class FinancialLens:
 
     def _process_document(self, doc: str, data: bytes, media_type: str) -> IngestResult:
         text = ocr.recognise(data, media_type)
+        an = understand.analyse(text)
+        if an.doc_type == "bank_statement" and an.rows:
+            return self._import_statement_document(doc, text, an)
+        if an.doc_type == "payslip":
+            return self._record_payslip(doc, text, an)
         ex = self._ai_fill(fx.extract(text), text, doc)
+        if an.doc_type in ("invoice", "receipt"):
+            ex.doc_type = fx.Field(an.doc_type, None, "; ".join(an.type_evidence), max(an.type_score, 0.6), "evidence")
+            total = an.facts.get("total")
+            if total and ex.amount is not None and ex.amount.method == "qr-bill":
+                pass  # structured QR data wins; a disagreement is reported below
+            elif total and (ex.amount is None or Decimal(str(ex.amount.value)) != total["value"]):
+                supported = an.checks and an.checks[0].ok
+                ex.amount = fx.Field(total["value"], total["line"], total["quote"], 0.95 if supported else 0.6,
+                                     "arithmetic" if supported else "label")
         messages = []
         with self.db.transaction():
             self.db.execute("INSERT INTO extractions (id, document_id, engine, text, fields) VALUES (%s,%s,%s,%s,%s)",
-                            (_uuid(), doc, text.engine, text.text, Jsonb(ex.to_json())))
+                            (_uuid(), doc, text.engine, text.text, Jsonb({**ex.to_json(), "analysis": an.to_json()})))
             self._ai_log("ocr", text.engine, "local", f"Recognised {len(text.lines)} lines"
                          + (f", mean confidence {text.mean_confidence:.0%}" if text.mean_confidence else ""),
                          {"qr_codes": len(text.qr_payloads)}, document_id=doc)
@@ -523,6 +538,13 @@ class FinancialLens:
                     doubts.append("no category found")
                 if doc_type == "unknown":
                     doubts.append("document type not recognised")
+                qr_agrees = structured and (an.facts.get("total") is None or
+                                            an.facts["total"]["value"] == Decimal(str(ex.amount.value)))
+                if structured and not qr_agrees:
+                    doubts.append(f"QR-bill amount {ex.amount.value} differs from the printed total {an.facts['total']['value']}")
+                if not structured:  # a decoded QR-bill is itself the arithmetic proof of the amount
+                    doubts.extend(c.detail for c in an.checks if not c.ok)
+                    doubts.extend(an.problems)
                 ai_fields = [n for n, f in ex.fields().items() if f.method == "ai"]
                 if ai_fields:
                     doubts.append("read by a model: " + ", ".join(ai_fields))
@@ -558,6 +580,104 @@ class FinancialLens:
             self.db.execute("UPDATE documents SET doc_type=%s, doc_type_confidence=%s, processing_status=%s, folder=%s "
                             "WHERE id=%s", (doc_type, ex.doc_type.confidence, status, folder, doc))
         return IngestResult(doc, doc_type, None, op_ids, [], messages)
+
+    def _explain(self, an) -> str:
+        bad = [c.detail for c in an.checks if not c.ok] + an.problems
+        good = [c.name for c in an.checks if c.ok]
+        return ("Checked: " + "; ".join(good) + ". " if good else "") + ("Doubts: " + "; ".join(bad) if bad else "")
+
+    def _record_payslip(self, doc: str, text, an) -> IngestResult:
+        """A payslip is income: the net (or payout) amount, with gross and every deduction kept as evidence."""
+        f = an.facts
+        amount = f.get("payout") or f.get("net")
+        when = f.get("date")
+        messages = []
+        with self.db.transaction():
+            self.db.execute("INSERT INTO extractions (id, document_id, engine, text, fields) VALUES (%s,%s,%s,%s,%s)",
+                            (_uuid(), doc, text.engine, text.text, Jsonb({"analysis": an.to_json()})))
+            self._ai_log("recognise", "analyst:payslip", "local", "Document type: payslip",
+                         {"score": an.type_score, "evidence": an.type_evidence}, document_id=doc)
+            self._ai_log("extract", "analyst:payslip", "local",
+                         "Checks: " + ", ".join(f"{c.name} {'✓' if c.ok else '✗'}" for c in an.checks),
+                         an.to_json(), document_id=doc)
+            op_ids = []
+            if amount is None or when is None:
+                messages.append("Payslip recognised, but " + ("no net or payout amount" if amount is None else "no date") +
+                                " was found. Nothing was guessed; it waits in the inbox. " + self._explain(an))
+                status, folder = "needs_review", f"{when['value'].year if when else 'UNDATED'}/INCOME/Salary"
+            else:
+                ok = an.consistent
+                reason = ("Payslip arithmetic checks out; awaiting the bank credit. " if ok else "") + self._explain(an)
+                prov = {k: v for k, v in an.to_json()["facts"].items()}
+                prov["checks"] = [c.to_json() for c in an.checks]
+                op = self._new_operation("payslip", {
+                    "amount": amount["value"], "currency": BASE, "op_date": when["value"],
+                    "counterparty": (f.get("employer") or {}).get("value", ""),
+                    "description": f"Salary {f['period']['value']}" if f.get("period") else "Salary",
+                    "category_id": self.category_id(("Salary",), "income"),
+                    "period": f["period"]["value"] if f.get("period") else None,
+                    "verification": "unconfirmed" if ok else "needs_review", "verification_reason": reason[:900],
+                    "source_document_id": doc, "method": "ocr" if "tesseract" in text.engine else "structured_import",
+                    "agent": "analyst:payslip", "confidence": Decimal("0.95") if ok else Decimal("0.6"), "provenance": prov,
+                }, change_reason="recognised payslip")
+                self.db.execute("INSERT INTO document_operations VALUES (%s,%s,'source')", (doc, op))
+                op_ids.append(op)
+                status = "processed" if ok else "needs_review"
+                folder = f"{when['value'].year}/INCOME/Salary"
+                if not ok:
+                    messages.append("Payslip read, but the numbers do not fully reconcile: " + self._explain(an))
+            self.db.execute("UPDATE documents SET doc_type='payslip', doc_type_confidence=%s, processing_status=%s, folder=%s "
+                            "WHERE id=%s", (an.type_score, status, folder, doc))
+        return IngestResult(doc, "payslip", None, op_ids, [], messages)
+
+    def _import_statement_document(self, doc: str, text, an) -> IngestResult:
+        """A statement as PDF or photo: every booking line becomes a payment; the balance arithmetic decides
+        whether the import can be trusted."""
+        from .domain.events import Method, Payment, Provenance
+        from .domain.money import Money
+
+        with self.db.transaction():
+            self._ai_log("recognise", "analyst:statement", "local", "Document type: bank statement",
+                         {"score": an.type_score, "evidence": an.type_evidence}, document_id=doc)
+            self._ai_log("extract", "analyst:statement", "local",
+                         f"{len(an.rows)} booking lines; checks: " +
+                         ", ".join(f"{c.name} {'✓' if c.ok else '✗'}" for c in an.checks), an.to_json(), document_id=doc)
+        payments, skipped_rows = [], []
+        seen: dict[str, int] = {}
+        for r in an.rows:
+            if r["amount"] is None or r["date"] is None:
+                skipped_rows.append(r["quote"])
+                continue
+            words = re.sub(r"^\s*\d{1,2}[./]\d{1,2}[./]?(\d{2,4})?\s*", "", r["text"])
+            words = re.sub(r"\b\d{1,2}[./]\d{1,2}[./](\d{2,4})?\b", " ", words)
+            party = re.sub(r"^(zahlung an|gutschrift von|gutschrift|lastschrift|e-banking|einkauf|paiement à|"
+                           r"versement de|virement de|achat|twint|ordine|pagamento a)\s*", "", " ".join(words.split()), flags=re.I)
+            key = f"pdf:{r['date']}:{r['amount']}:{party[:30]}"
+            seen[key] = seen.get(key, 0) + 1
+            payments.append(Payment(
+                amount=Money(r["amount"].quantize(Decimal("0.01")), BASE), booked_on=r["date"],
+                counterparty=party[:120], remittance=" ".join(words.split())[:300] or None,
+                bank_reference=f"{key}#{seen[key]}",
+                provenance=Provenance(doc, f"line {r['line']}", Method.STRUCTURED_IMPORT, "analyst:statement",
+                                      quote=r["quote"])))
+        iban = (an.facts.get("iban") or {}).get("value")
+        result = self._import_payments(doc, payments, iban, f"{text.engine}+statement-analyst")
+        if not an.consistent:
+            note = "The statement does not fully reconcile — please check. " + self._explain(an)
+            with self.db.transaction():
+                for op in result.operation_ids:
+                    self._revision(op, {"verification": "needs_review", "verification_reason": note[:900],
+                                        "agent": "analyst:statement"}, "statement checks failed")
+                self.db.execute("UPDATE documents SET processing_status='needs_review' WHERE id=%s", (doc,))
+            result.messages.append(note)
+        else:
+            result.messages.append("Statement reconciles: " + "; ".join(c.name for c in an.checks) + ".")
+        if skipped_rows:
+            result.messages.append(f"{len(skipped_rows)} lines without date or amount were not imported.")
+        with self.db.transaction():
+            self.db.execute("INSERT INTO extractions (id, document_id, engine, text, fields) VALUES (%s,%s,%s,%s,%s)",
+                            (_uuid(), doc, text.engine, text.text, Jsonb({"analysis": an.to_json()})))
+        return result
 
     def _account(self, iban: Optional[str], currency: str) -> Optional[str]:
         if not iban:

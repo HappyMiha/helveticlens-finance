@@ -16,11 +16,19 @@ from pathlib import Path
 
 
 @dataclass
+class Word:
+    text: str
+    x0: float  # horizontal position as a fraction of the page width (0..1)
+    x1: float
+
+
+@dataclass
 class Line:
     number: int  # 1-based, per document
     page: int
     text: str
     confidence: float | None = None  # 0..1 for OCR, None for a text layer
+    words: list = field(default_factory=list)  # list[Word], left to right, for column analysis
 
 
 @dataclass
@@ -147,12 +155,14 @@ def _ocr_image(image, page: int, start: int) -> list[Line]:
         if key not in grouped:
             grouped[key] = []
             order.append(key)
-        grouped[key].append((cols[11], max(float(cols[10]), 0.0) / 100))
+        grouped[key].append((cols[11], max(float(cols[10]), 0.0) / 100,
+                             int(cols[6]) / image.width, (int(cols[6]) + int(cols[8])) / image.width))
     lines = []
     for i, key in enumerate(order):
         words = grouped[key]
-        lines.append(Line(start + i, page, " ".join(w for w, _ in words),
-                          round(sum(c for _, c in words) / len(words), 3)))
+        lines.append(Line(start + i, page, " ".join(w[0] for w in words),
+                          round(sum(w[1] for w in words) / len(words), 3),
+                          [Word(w[0], w[2], w[3]) for w in words]))
     return lines
 
 
@@ -171,22 +181,66 @@ def recognise(data: bytes, media_type: str) -> TextResult:
     raise ValueError(f"No text engine for {media_type}")
 
 
+def _pdf_lines(page, page_no: int, start: int) -> list[Line]:
+    """Rebuild lines and words from pdfium character boxes, keeping horizontal positions
+    so tables (statements, payslips) can be read by column."""
+    tp = page.get_textpage()
+    width = page.get_width() or 1
+    chars = []
+    for i in range(tp.count_chars()):
+        ch = tp.get_text_range(i, 1)
+        if not ch or ch in "\r\n":
+            continue
+        l, b, r, t = tp.get_charbox(i, loose=True)  # loose: font-height boxes, so a line has one centre
+        chars.append((ch, l, r, (b + t) / 2, max(t - b, 1)))
+    # group into lines by vertical centre (PDF y grows upwards)
+    rows: list[list] = []
+    for c in sorted(chars, key=lambda c: (-c[3], c[1])):
+        if rows and abs(rows[-1][0][3] - c[3]) <= 0.45 * max(c[4], rows[-1][0][4]):
+            rows[-1].append(c)
+        else:
+            rows.append([c])
+    lines = []
+    for row in rows:
+        row.sort(key=lambda c: c[1])
+        words, cur, x0, x1 = [], "", None, None
+        avg = sum(c[2] - c[1] for c in row) / len(row) or 1
+        for ch, l, r, _, _ in row:
+            gap = l - x1 if x1 is not None else 0
+            if ch.isspace() or (cur and gap > 0.6 * avg):
+                if cur:
+                    words.append(Word(cur, x0 / width, x1 / width))
+                cur, x0, x1 = ("", None, None) if ch.isspace() else (ch, l, r)
+                continue
+            if not cur:
+                x0 = l
+            cur += ch
+            x1 = r
+        if cur:
+            words.append(Word(cur, x0 / width, x1 / width))
+        if words:
+            # big gaps become two spaces, so column breaks stay visible in the text too
+            text = ""
+            for k, w in enumerate(words):
+                if k:
+                    text += "  " if (w.x0 - words[k - 1].x1) > 0.03 else " "
+                text += w.text
+            lines.append(Line(start + len(lines), page_no, text, None, words))
+    return lines
+
+
 def _pdf(data: bytes) -> TextResult:
-    """Text layer via pdfium; pages rendered for QR codes and, without a text layer, for OCR."""
+    """Text layer via pdfium (with word positions); pages rendered for QR codes and,
+    without a text layer, for OCR."""
     import pypdfium2 as pdfium
 
     pdf = pdfium.PdfDocument(data)
     lines: list[Line] = []
-    n = 1
     for p in range(len(pdf)):
-        text = pdf[p].get_textpage().get_text_range()
-        for raw in text.replace("\r", "").split("\n"):
-            if raw.strip():
-                lines.append(Line(n, p + 1, " ".join(raw.split())))
-                n += 1
+        lines.extend(_pdf_lines(pdf[p], p + 1, len(lines) + 1))
     qr: list[str] = []
     ocr_lines: list[Line] = []
-    for p in range(min(len(pdf), 5)):
+    for p in range(min(len(pdf), 8)):
         image = pdf[p].render(scale=200 / 72).to_pil().convert("RGB")
         qr.extend(decode_qr(image))
         if len(lines) < 3:
