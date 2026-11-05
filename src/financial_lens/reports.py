@@ -145,6 +145,7 @@ def export_archive(lens: FinancialLens, target: Path) -> dict:
     links, metadata and history, with a SHA-256 manifest."""
     lens.authorize("export")
     tables = {
+        "organizations": "SELECT * FROM organizations WHERE id=%s",
         "operations_current": "SELECT * FROM operations_current WHERE organization_id=%s ORDER BY op_date",
         "operation_revisions": "SELECT r.* FROM operation_revisions r JOIN operations o ON o.id=r.operation_id "
                                "WHERE o.organization_id=%s ORDER BY r.operation_id, r.revision",

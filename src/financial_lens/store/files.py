@@ -21,6 +21,10 @@ class OriginalStore:
     def __init__(self, root: str | os.PathLike) -> None:
         self.root = Path(root)
         self.root.mkdir(parents=True, exist_ok=True)
+        try:
+            self.root.chmod(0o750)  # originals are not readable by other users of this machine
+        except PermissionError:
+            pass
 
     def _path(self, sha256: str) -> Path:
         return self.root / sha256[:2] / sha256[2:4] / sha256

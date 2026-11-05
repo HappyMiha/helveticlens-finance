@@ -69,7 +69,8 @@ DUE_WORDS = ["zahlbar bis", "fällig", "faellig", "due", "échéance", "echeance
 DOC_DATE_WORDS = ["rechnungsdatum", "datum", "date", "data", "invoice date", "date de facture"]
 LEGAL_FORMS = re.compile(r"\b(AG|GmbH|SA|Sàrl|Sarl|S\.A\.|Genossenschaft|Coop|KLG|LLC|Ltd|Inc|Verein|SRL|Sagl)\b", re.I)
 
-AMOUNT_RE = re.compile(r"(?<![\d.,'’])(\d{1,3}(?:['’ ]\d{3})+|\d+)[.,](\d{2})(?![\d])")
+# Not part of a date (03.10.2026) or a longer number.
+AMOUNT_RE = re.compile(r"(?<![\d.,'’/])(\d{1,3}(?:['’ ]\d{3})+|\d+)[.,](\d{2})(?![\d]|[./]\d)")
 CURRENCY_RE = re.compile(r"\b(CHF|EUR|USD|GBP|SFr\.?|Fr\.)", re.I)
 DATE_RES = [
     (re.compile(r"\b(\d{1,2})[./](\d{1,2})[./](\d{4})\b"), "dmy"),

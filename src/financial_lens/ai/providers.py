@@ -95,31 +95,49 @@ class Scripted:
 
 @dataclass
 class Orchestrator:
-    """Routes tasks to providers in order, enforcing the privacy level."""
+    """Routes tasks to providers in order, enforcing the privacy level per document,
+    redacting identifiers before anything leaves the machine, falling back on
+    errors and preferring providers with a better track record."""
 
     level: str = "local_only"
     routes: dict[str, list] = field(default_factory=dict)  # task -> [Provider, ...] (fallback order)
     log: Callable[[str, str, str, str, dict], None] = lambda task, provider, locality, summary, details: None
-    external_consent: Callable[[str], bool] = lambda document_id: False
+    document_privacy: Callable[[Optional[str]], Optional[str]] = lambda document_id: None
+    stats: dict[str, list[int]] = field(default_factory=dict)  # provider -> [answered, failed]
 
-    def _allowed(self, provider, document_id: Optional[str]) -> bool:
-        if provider.locality not in LEVEL_ALLOWS[self.level]:
-            return False
-        if provider.locality == "external" and not self.external_consent(document_id or ""):
-            return False
-        return True
+    def score(self, provider) -> float:
+        ok, bad = self.stats.get(provider.name, [0, 0])
+        return (ok + 1) / (ok + bad + 2)  # Laplace-smoothed success rate
 
-    def run(self, task: str, system: str, user: str, document_id: Optional[str] = None) -> Optional[str]:
-        for provider in self.routes.get(task, []):
-            if not self._allowed(provider, document_id):
-                self.log(task, provider.name, provider.locality, "skipped by privacy level", {"level": self.level})
+    def _ordered(self, task: str) -> list:
+        providers = self.routes.get(task, [])
+        return sorted(providers, key=lambda p: (-round(self.score(p), 1), providers.index(p)))
+
+    def run(self, task: str, system: str, user: str, document_id: Optional[str] = None,
+            validate: Optional[Callable[[str], bool]] = None) -> Optional[str]:
+        from ..privacy import document_may_leave, redact
+
+        doc_privacy = self.document_privacy(document_id) if document_id else self.level
+        for provider in self._ordered(task):
+            if provider.locality not in LEVEL_ALLOWS[self.level] or \
+                    not document_may_leave(self.level, doc_privacy, provider.locality):
+                self.log(task, provider.name, provider.locality, "skipped by privacy level",
+                         {"level": self.level, "document_privacy": doc_privacy})
                 continue
+            payload, removed = (user, []) if provider.locality == "local" else redact(user)
             try:
-                answer = provider.complete(system, user)
+                answer = provider.complete(system, payload)
             except Exception as exc:  # fall back to the next provider
+                self.stats.setdefault(provider.name, [0, 0])[1] += 1
                 self.log(task, provider.name, provider.locality, "failed", {"error": str(exc)[:300]})
                 continue
-            self.log(task, provider.name, provider.locality, "answered", {"chars_sent": len(user)})
+            if validate is not None and not validate(answer):
+                self.stats.setdefault(provider.name, [0, 0])[1] += 1
+                self.log(task, provider.name, provider.locality, "answer rejected by validation", {"chars": len(answer)})
+                continue
+            self.stats.setdefault(provider.name, [0, 0])[0] += 1
+            self.log(task, provider.name, provider.locality, "answered",
+                     {"chars_sent": len(payload), "redacted": removed, "left_machine": provider.locality != "local"})
             return answer
         return None
 
@@ -142,3 +160,17 @@ class Orchestrator:
             return Suggestion(tuple(choice.split(" / ")), conf, "ai", str(data.get("reason", ""))[:200])
         except (ValueError, TypeError):
             return None
+
+
+def provider_from_config(cfg: dict):
+    """{"type": "openai_compatible"|"anthropic", "name":..., "locality": local|swiss|external, ...}"""
+    kind = cfg.get("type", "openai_compatible")
+    if kind == "anthropic":
+        return Anthropic(cfg["name"], cfg["model"], cfg["api_key"], cfg.get("locality", "external"))
+    return OpenAICompatible(cfg["name"], cfg["base_url"], cfg["model"], cfg["locality"], cfg.get("api_key"))
+
+
+def orchestrator_from_config(config: dict, **kwargs) -> Orchestrator:
+    providers = {c["name"]: provider_from_config(c) for c in config.get("providers", [])}
+    routes = {task: [providers[n] for n in names if n in providers] for task, names in config.get("routes", {}).items()}
+    return Orchestrator(level=config.get("level", "local_only"), routes=routes, **kwargs)

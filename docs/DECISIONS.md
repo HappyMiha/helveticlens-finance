@@ -21,3 +21,7 @@ Each entry: date · decision · reason.
 - 2026-11-05 · Member contributions: a member number in the payment text confirms the contribution; a matching name alone is only proposed. Confirmed payments are allocated to dues oldest first; arrears = overdue open dues.
 - 2026-11-05 · Cost allocation across objects uses integer weights (e.g. m²) and the cent-exact `Money.allocate`.
 - 2026-11-05 · PDF reports are produced by a small built-in writer (no external dependency); the full archive is a ZIP with every table as JSON and CSV, all originals in their virtual folders and a SHA-256 manifest.
+- 2026-11-05 · L2 is enforced twice: a socket guard inside the app process and an `internal` Docker network; only a small proxy publishes the loopback port. Verified that the app container cannot reach the internet.
+- 2026-11-05 · Default privacy level for a new profile is L2 (maximum); moving to L1/L0 is an explicit, audited admin action.
+- 2026-11-05 · Audit log rows are hash-chained so tampering is detectable even by a database superuser.
+- 2026-11-05 · Backups: AES-256-GCM with scrypt-derived key; restore verifies the manifest and every original before inserting anything.

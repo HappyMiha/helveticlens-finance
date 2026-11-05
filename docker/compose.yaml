@@ -1,0 +1,55 @@
+# Financial Lens on one machine. Default: L2 (maximum privacy) — the app
+# container sits on an internal network with no route to the internet.
+#   docker compose -f docker/compose.yaml up -d
+#   open http://127.0.0.1:8765/docs
+# For a local model, enable the profile: --profile local-ai (Ollama on the same internal network).
+name: financial-lens
+services:
+  db:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: fl
+      POSTGRES_DB: fl
+      POSTGRES_PASSWORD_FILE: /run/secrets/db_password
+    secrets: [db_password]
+    volumes: [db:/var/lib/postgresql/data]
+    networks: [private]
+    healthcheck: {test: ["CMD", "pg_isready", "-U", "fl"], interval: 5s, retries: 20}
+  app:
+    build: {context: .., dockerfile: docker/app.Dockerfile}
+    restart: unless-stopped
+    depends_on: {db: {condition: service_healthy}}
+    environment:
+      FL_DSN_FILE: /run/secrets/dsn
+      FL_DATA: /data
+      FL_ORG: ${FL_ORG:-Personal}
+    secrets: [dsn]
+    volumes: [originals:/data]
+    networks: [private]              # no route to the internet at container level either
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+  gate:
+    # The only container with a published port; it forwards to the app and nothing else.
+    image: nginxinc/nginx-unprivileged:1.27-alpine
+    restart: unless-stopped
+    depends_on: [app]
+    volumes: [./gate.conf:/etc/nginx/conf.d/default.conf:ro]
+    networks: [private, edge]
+    ports: ["127.0.0.1:8765:8765"]   # loopback only
+    read_only: true
+    tmpfs: [/tmp]
+  ollama:
+    image: ollama/ollama:0.5.7
+    profiles: [local-ai]
+    volumes: [models:/root/.ollama]
+    networks: [private]
+networks:
+  private: {internal: true}  # no internet access
+  edge: {}                   # only the gate joins it, to publish 127.0.0.1:8765
+secrets:
+  db_password: {file: ./secrets/db_password}
+  dsn: {file: ./secrets/dsn}
+volumes: {db: {}, originals: {}, models: {}}

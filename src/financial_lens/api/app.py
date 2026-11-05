@@ -28,6 +28,11 @@ def _lens() -> FinancialLens:
                          actor=os.environ.get("FL_ACTOR", "user:local"))
     lens.migrate()
     lens.open_organization(os.environ.get("FL_ORG", "Personal"), os.environ.get("FL_ORG_KIND", "personal"))
+    if lens.privacy_level() == "local_only":  # L2: no outbound connections from this process
+        from .. import privacy
+
+        host = lens.db.info.host
+        privacy.enforce_local_only([host] if host and not host.startswith("/") else [])
     return lens
 
 
@@ -314,3 +319,10 @@ def export(fl: FinancialLens = Depends(lens)) -> FileResponse:
     target = Path(tempfile.mkdtemp()) / f"financial-lens-export-{date.today()}.zip"
     _rep.export_archive(fl, target)
     return FileResponse(target, filename=target.name, media_type="application/zip")
+
+
+@app.get("/security/check")
+def security_check(fl: FinancialLens = Depends(lens)) -> dict:
+    from .. import security
+
+    return security.self_check(fl)

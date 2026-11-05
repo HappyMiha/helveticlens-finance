@@ -6,8 +6,10 @@ The API and the desktop app both call this; neither does its own maths.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import mimetypes
+import re
 import uuid
 from dataclasses import dataclass
 from datetime import date, timedelta
@@ -157,9 +159,105 @@ class FinancialLens:
         return cid
 
     def _audit(self, action: str, entity: str, entity_id: str, details: dict, actor: Optional[str] = None) -> None:
-        self.db.execute("INSERT INTO audit_log (organization_id, actor, action, entity, entity_id, details) "
-                        "VALUES (%s,%s,%s,%s,%s,%s)",
-                        (self.org, actor or self.actor, action, entity, entity_id, Jsonb(details)))
+        """Append to the audit log. Each row carries a hash over the previous row's hash
+        and its own content, so any later edit or deletion breaks the chain."""
+        details = json.loads(json.dumps(details, default=str))
+        self.db.execute("SELECT pg_advisory_xact_lock(4242)")
+        prev = self.db.execute("SELECT chain FROM audit_log ORDER BY id DESC LIMIT 1").fetchone()
+        body = json.dumps([prev["chain"] if prev else "", str(self.org), actor or self.actor, action, entity,
+                           entity_id, details], sort_keys=True, ensure_ascii=False)
+        chain = hashlib.sha256(body.encode()).hexdigest()
+        self.db.execute("INSERT INTO audit_log (organization_id, actor, action, entity, entity_id, details, chain) "
+                        "VALUES (%s,%s,%s,%s,%s,%s,%s)",
+                        (self.org, actor or self.actor, action, entity, entity_id, Jsonb(details), chain))
+
+    def verify_audit_chain(self) -> dict:
+        prev, n = "", 0
+        for r in self.db.execute("SELECT * FROM audit_log ORDER BY id").fetchall():
+            body = json.dumps([prev, str(r["organization_id"]), r["actor"], r["action"], r["entity"], r["entity_id"],
+                               r["details"]], sort_keys=True, ensure_ascii=False)
+            if hashlib.sha256(body.encode()).hexdigest() != r["chain"]:
+                return {"ok": False, "broken_at": r["id"], "checked": n}
+            prev, n = r["chain"], n + 1
+        return {"ok": True, "checked": n}
+
+    # ------------------------------------------------------------- privacy
+    def privacy_level(self) -> str:
+        row = self.db.execute("SELECT value FROM settings WHERE organization_id=%s AND key='privacy_level'",
+                              (self.org,)).fetchone()
+        return row["value"] if row else "local_only"
+
+    def set_privacy_level(self, level: str) -> None:
+        from .privacy import resolve
+
+        self.authorize("admin")
+        level = resolve(level)
+        with self.db.transaction():
+            self.db.execute("INSERT INTO settings VALUES (%s,'privacy_level',%s) ON CONFLICT (organization_id, key) "
+                            "DO UPDATE SET value=EXCLUDED.value, updated_at=now()", (self.org, Jsonb(level)))
+            self._audit("privacy_level", "organization", self.org, {"level": level})
+        if self.ai is not None:
+            self.ai.level = level
+
+    def attach_ai(self, orchestrator) -> None:
+        """Connect a model orchestrator: it logs into AI Activity and asks each document's privacy setting."""
+        orchestrator.level = self.privacy_level()
+
+        def log(task, provider, locality, summary, details):
+            with self.db.transaction():
+                self._ai_log(task, provider, locality, summary, details)
+
+        def doc_privacy(document_id):
+            row = self.db.execute("SELECT privacy FROM documents WHERE id=%s", (document_id,)).fetchone()
+            return row["privacy"] if row else "local_only"
+
+        orchestrator.log = log
+        orchestrator.document_privacy = doc_privacy
+        self.ai = orchestrator
+
+    def _ai_fill(self, ex, text, doc: str):
+        """Ask a model for fields the rules could not find. Accepted only if the model quotes
+        text that exists verbatim in the document and the value can be read from that quote."""
+        if self.ai is None:
+            return ex
+        missing = [n for n in ("amount", "doc_date", "counterparty") if getattr(ex, n) is None]
+        if not missing:
+            return ex
+        system = ("Extract fields from a financial document. Reply with JSON {field: {\"value\": str, \"quote\": str}} "
+                  "for these fields only: " + ", ".join(missing) + ". The quote must be copied exactly from the text. "
+                  "Omit a field you cannot find. Never guess.")
+        answer = self.ai.run("extract", system, text.text[:6000], document_id=doc,
+                             validate=lambda a: "{" in a)
+        if not answer:
+            return ex
+        try:
+            data = json.loads(answer[answer.find("{"): answer.rfind("}") + 1])
+        except ValueError:
+            return ex
+        for name in missing:
+            item = data.get(name) if isinstance(data, dict) else None
+            if not isinstance(item, dict) or not item.get("quote") or item["quote"] not in text.text:
+                continue
+            line = next((l for l in text.lines if item["quote"] in l.text), None)
+            value = item.get("value")
+            if name == "amount":
+                # The claimed value must literally be a number in the quoted text.
+                try:
+                    claimed = Decimal(str(value).replace("'", "").replace("’", "").replace(",", "."))
+                except Exception:
+                    continue
+                numbers = {Decimal(n.replace("'", "").replace("’", "").replace(",", "."))
+                           for n in re.findall(r"\d[\d'’]*(?:[.,]\d{1,2})?", item["quote"])}
+                if claimed not in numbers or claimed <= 0:
+                    continue
+                value = claimed.quantize(Decimal("0.01"))
+            elif name == "doc_date":
+                dates = [d for d, _ in fx._dates(fx.Line(0, 1, item["quote"]))]
+                if not dates:
+                    continue
+                value = dates[0]
+            setattr(ex, name, fx.Field(value, line.number if line else None, item["quote"], 0.6, "ai"))
+        return ex
 
     def _ai_log(self, task: str, provider: str, locality: str, summary: str, details: dict,
                 document_id: Optional[str] = None, operation_id: Optional[str] = None) -> None:
@@ -387,7 +485,7 @@ class FinancialLens:
 
     def _process_document(self, doc: str, data: bytes, media_type: str) -> IngestResult:
         text = ocr.recognise(data, media_type)
-        ex = fx.extract(text)
+        ex = self._ai_fill(fx.extract(text), text, doc)
         messages = []
         with self.db.transaction():
             self.db.execute("INSERT INTO extractions (id, document_id, engine, text, fields) VALUES (%s,%s,%s,%s,%s)",
@@ -425,6 +523,9 @@ class FinancialLens:
                     doubts.append("no category found")
                 if doc_type == "unknown":
                     doubts.append("document type not recognised")
+                ai_fields = [n for n, f in ex.fields().items() if f.method == "ai"]
+                if ai_fields:
+                    doubts.append("read by a model: " + ", ".join(ai_fields))
                 if doubts:
                     verification, reason = "needs_review", "Recognised, but " + "; ".join(doubts)
                 else:
@@ -440,7 +541,8 @@ class FinancialLens:
                     "category_id": self.category_id(sug.path, "income" if kind == "payslip" else "expense"),
                     "reference": str(ex.reference.value) if ex.reference else None,
                     "verification": verification, "verification_reason": reason, "source_document_id": doc,
-                    "method": "structured_import" if structured else "ocr", "agent": f"pipeline:{text.engine}",
+                    "method": "structured_import" if structured else ("ai_extraction" if ai_fields else "ocr"),
+                    "agent": f"pipeline:{text.engine}",
                     "confidence": Decimal(str(round(weakest if not structured else 1.0, 3))), "provenance": prov,
                 }, change_reason="recognised from document")
                 self.db.execute("INSERT INTO document_operations VALUES (%s,%s,'source')", (doc, op))

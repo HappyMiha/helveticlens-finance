@@ -334,4 +334,15 @@ SELECT DISTINCT ON (r.operation_id)
 FROM operation_revisions r JOIN operations o ON o.id = r.operation_id
 ORDER BY r.operation_id, r.revision DESC;
 
-INSERT INTO schema_version (version) VALUES (1), (2), (3) ON CONFLICT DO NOTHING;
+
+-- v4: Phase 4 — settings (privacy level) and a tamper-evident audit chain.
+CREATE TABLE IF NOT EXISTS settings (
+  organization_id uuid NOT NULL REFERENCES organizations(id),
+  key text NOT NULL,
+  value jsonb NOT NULL,
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (organization_id, key)
+);
+ALTER TABLE audit_log ADD COLUMN IF NOT EXISTS chain char(64);
+
+INSERT INTO schema_version (version) VALUES (1), (2), (3), (4) ON CONFLICT DO NOTHING;
