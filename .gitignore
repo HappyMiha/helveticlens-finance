@@ -9,3 +9,5 @@ deploy/cloudflared/*.json
 deploy/cloudflared/config.yml
 deploy/cloudflared/cert.pem
 data/
+build/
+dist/

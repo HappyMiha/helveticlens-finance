@@ -10,5 +10,5 @@ COPY pyproject.toml ./
 RUN pip install --no-cache-dir \
       "fastapi>=0.115" "uvicorn>=0.32" "python-multipart>=0.0.12" httpx \
       "psycopg[binary]>=3.2" pillow pyzbar "qrcode>=7.4" pytest openpyxl \
-      "PySide6-Essentials>=6.8" "cryptography>=43" "pillow-heif>=0.18"
+      "PySide6-Essentials>=6.8" "cryptography>=43" "pillow-heif>=0.18" pypdfium2 zxing-cpp pgserver
 ENV PYTHONPATH=/app/src QT_QPA_PLATFORM=offscreen

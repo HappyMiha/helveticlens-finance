@@ -43,13 +43,46 @@ IMAGE_TYPES = {"image/jpeg", "image/png", "image/tiff", "image/webp", "image/hei
 LANGS = "deu+fra+ita+eng"
 
 
+def tesseract_cmd() -> str:
+    """Tesseract shipped inside the installer, an explicit FL_TESSERACT, or the system one."""
+    import os
+    import sys
+
+    if os.environ.get("FL_TESSERACT"):
+        return os.environ["FL_TESSERACT"]
+    base = Path(getattr(sys, "_MEIPASS", "")) / "tesseract"
+    exe = base / ("tesseract.exe" if sys.platform == "win32" else "tesseract")
+    if exe.exists():
+        os.environ.setdefault("TESSDATA_PREFIX", str(base / "tessdata"))
+        return str(exe)
+    return "tesseract"
+
+
+def _tess_env() -> dict:
+    """Environment for the bundled Tesseract: its libraries live next to the app's."""
+    import os
+    import sys
+
+    env = dict(os.environ)
+    base = getattr(sys, "_MEIPASS", None)
+    if base:
+        var = "DYLD_LIBRARY_PATH" if sys.platform == "darwin" else "LD_LIBRARY_PATH"
+        if sys.platform != "win32":
+            env[var] = os.pathsep.join(p for p in (base, str(Path(base) / "tesseract"), env.get(var, "")) if p)
+    return env
+
+
 def available() -> dict[str, bool]:
-    return {name: shutil.which(name) is not None for name in ("tesseract", "pdftotext", "pdftoppm")}
+    import importlib.util
+
+    return {"tesseract": shutil.which(tesseract_cmd()) is not None or Path(tesseract_cmd()).exists(),
+            "pypdfium2": importlib.util.find_spec("pypdfium2") is not None,
+            "zxingcpp": importlib.util.find_spec("zxingcpp") is not None}
 
 
 def _tesseract_version() -> str:
     try:
-        out = subprocess.run(["tesseract", "--version"], capture_output=True, text=True, timeout=10)
+        out = subprocess.run([tesseract_cmd(), "--version"], capture_output=True, text=True, timeout=10, env=_tess_env())
         return "tesseract-" + (out.stdout or out.stderr).split()[1]
     except Exception:
         return "tesseract"
@@ -70,6 +103,12 @@ def _load_image(data: bytes):
 
 
 def decode_qr(image) -> list[str]:
+    try:  # zxing-cpp: self-contained wheels on Linux, Windows and macOS
+        import zxingcpp
+
+        return [r.text for r in zxingcpp.read_barcodes(image) if r.text]
+    except ImportError:
+        pass
     try:
         from pyzbar import pyzbar
     except Exception:
@@ -93,8 +132,8 @@ def _ocr_image(image, page: int, start: int) -> list[Line]:
             image = image.resize((int(image.width * factor), int(image.height * factor)))
         image.convert("L").save(src)
         out = subprocess.run(
-            ["tesseract", str(src), "stdout", "-l", LANGS, "--psm", "6", "tsv"],
-            capture_output=True, text=True, timeout=180,
+            [tesseract_cmd(), str(src), "stdout", "-l", LANGS, "--psm", "6", "tsv"],
+            capture_output=True, text=True, timeout=180, env=_tess_env(),
         )
     if out.returncode != 0:
         raise RuntimeError(out.stderr.strip() or "tesseract failed")
@@ -133,32 +172,26 @@ def recognise(data: bytes, media_type: str) -> TextResult:
 
 
 def _pdf(data: bytes) -> TextResult:
-    with tempfile.TemporaryDirectory() as tmp:
-        src = Path(tmp) / "doc.pdf"
-        src.write_bytes(data)
-        text = subprocess.run(["pdftotext", "-layout", str(src), "-"],
-                              capture_output=True, text=True, timeout=120).stdout
-        pages = text.split("\f")
-        lines: list[Line] = []
-        n = 1
-        for p, page in enumerate(pages, start=1):
-            for raw in page.splitlines():
-                if raw.strip():
-                    lines.append(Line(n, p, " ".join(raw.split())))
-                    n += 1
-        # Rasterise for QR codes, and for OCR when there is no text layer.
-        subprocess.run(["pdftoppm", "-r", "200", "-png", "-l", "5", str(src), str(Path(tmp) / "p")],
-                       capture_output=True, timeout=180)
-        from PIL import Image
+    """Text layer via pdfium; pages rendered for QR codes and, without a text layer, for OCR."""
+    import pypdfium2 as pdfium
 
-        images = sorted(Path(tmp).glob("p-*.png"))
-        qr: list[str] = []
-        ocr_lines: list[Line] = []
-        for p, img_path in enumerate(images, start=1):
-            image = Image.open(img_path).convert("RGB")
-            qr.extend(decode_qr(image))
-            if len(lines) < 3:
-                ocr_lines.extend(_ocr_image(image, p, len(ocr_lines) + 1))
+    pdf = pdfium.PdfDocument(data)
+    lines: list[Line] = []
+    n = 1
+    for p in range(len(pdf)):
+        text = pdf[p].get_textpage().get_text_range()
+        for raw in text.replace("\r", "").split("\n"):
+            if raw.strip():
+                lines.append(Line(n, p + 1, " ".join(raw.split())))
+                n += 1
+    qr: list[str] = []
+    ocr_lines: list[Line] = []
+    for p in range(min(len(pdf), 5)):
+        image = pdf[p].render(scale=200 / 72).to_pil().convert("RGB")
+        qr.extend(decode_qr(image))
+        if len(lines) < 3:
+            ocr_lines.extend(_ocr_image(image, p + 1, len(ocr_lines) + 1))
+    pdf.close()
     if len(lines) < 3 and ocr_lines:
-        return TextResult(_tesseract_version() + "+pdftoppm", ocr_lines, qr)
-    return TextResult("pdftotext", lines, qr)
+        return TextResult(_tesseract_version() + "+pdfium", ocr_lines, qr)
+    return TextResult("pdfium", lines, qr)

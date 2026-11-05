@@ -814,10 +814,16 @@ def evidence_html(d: dict) -> str:
 
 def main() -> int:
     app = QApplication(sys.argv)
-    lens = FinancialLens(os.environ.get("FL_DSN", "dbname=financial_lens"),
-                         os.path.expanduser(os.environ.get("FL_DATA", "~/FinancialLens")))
+    app.setApplicationName("Financial Lens")
+    from .. import local_db, privacy
+
+    dsn = local_db.dsn()  # own PostgreSQL via FL_DSN, otherwise the embedded one
+    lens = FinancialLens(dsn, local_db.data_dir())
     lens.migrate()
     lens.open_organization(os.environ.get("FL_ORG", "Personal"))
+    if lens.privacy_level() == "local_only":
+        host = lens.db.info.host
+        privacy.enforce_local_only([host] if host and not host.startswith("/") else [])
     window = MainWindow(lens)
     window.show()
     return app.exec()
