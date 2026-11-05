@@ -125,3 +125,13 @@ footer .wrap { display: flex; flex-wrap: wrap; justify-content: space-between; g
 a.card.dl { text-decoration: none; transition: border-color var(--motion-fast) var(--hl-ease); }
 a.card.dl:hover, a.card.dl:focus-visible { border-color: var(--line-strong); }
 a.card.dl h3::after { content: " ↓"; color: var(--text-secondary); }
+.guide-title { margin: var(--space-4) 0 var(--space-2); font-size: 1.2rem; }
+.android-guide { display: grid; gap: var(--space-3); grid-template-columns: 260px minmax(0, 1fr); align-items: start; }
+@media (max-width: 760px) { .android-guide { grid-template-columns: 1fr; } }
+.qrcard { display: flex; flex-direction: column; align-items: center; gap: 12px; text-align: center; }
+.qrcard img { width: 100%; max-width: 222px; height: auto; background: #fff; border-radius: 8px; image-rendering: pixelated; }
+.qrcard .btn { width: 100%; justify-content: center; }
+ol.steps { margin: 0; padding-left: 1.4em; display: grid; gap: var(--space-2); }
+ol.steps li { padding-left: 4px; }
+img.shot { display: block; width: 100%; max-width: 560px; height: auto; margin-top: 10px; border: 1px solid var(--line); border-radius: 12px; }
+img.shot.phone { max-width: 220px; }
