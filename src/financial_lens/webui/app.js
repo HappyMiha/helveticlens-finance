@@ -490,6 +490,12 @@
         box.appendChild(el('button', { class: 'btn small', text: 'Copy request code', onclick: function () {
           if (navigator.clipboard) navigator.clipboard.writeText(l.request).then(function () { toast('Copied.'); });
         } }));
+        if (l.contact.indexOf('@') > 0) {
+          box.appendChild(document.createTextNode(' '));
+          box.appendChild(el('a', { class: 'btn small', text: 'E-mail the request', href: 'mailto:' + l.contact +
+            '?subject=' + encodeURIComponent('Financial Lens licence request') +
+            '&body=' + encodeURIComponent('Plan (monthly or 2 years): \nNumber of users: ' + Math.max(l.users, 1) + '\nCompany: ' + (l.customer || '') + '\n\nRequest code:\n' + l.request) }));
+        }
       }
     }).catch(function (x) { clear(box).appendChild(el('p', { text: x.message })); });
   }

@@ -119,7 +119,7 @@ def main(argv=None) -> int:
     us.add_argument("--email", default="")
     us.add_argument("--role", default="viewer", choices=["owner", "admin", "editor", "viewer", "member"])
     li = sub.add_parser("license", help="corporate edition: licence")
-    li.add_argument("action", choices=["status", "request", "install", "keygen", "issue"])
+    li.add_argument("action", choices=["status", "request", "install", "keygen", "issue", "backup-key", "restore-key"])
     li.add_argument("value", nargs="?", help="the key (install) or the request code (issue)")
     li.add_argument("--plan", choices=["monthly", "2y"], default="monthly")
     li.add_argument("--seats", type=int, default=0)
@@ -131,7 +131,7 @@ def main(argv=None) -> int:
         from .launcher import serve_corporate
 
         return serve_corporate(args.host, args.port, args.org, args.cert, args.key)
-    if args.cmd == "license" and args.action in ("keygen", "issue"):
+    if args.cmd == "license" and args.action in ("keygen", "issue", "backup-key", "restore-key"):
         return _issuer(args)
 
     if args.cmd == "serve":
@@ -314,17 +314,43 @@ def _issuer(args) -> int:
     from . import licensing as L
 
     path = L.issuer_key_path()
-    if args.action == "keygen":
-        if path.exists():
-            sys.exit(f"An issuer key already exists at {path}; it is not replaced.")
-        priv, pub = L.keygen()
+    def passphrase(confirm: bool) -> str:
+        value = os.environ.get("FL_ISSUER_PASSPHRASE") or getpass.getpass("Passphrase for the key backup: ")
+        if confirm and not os.environ.get("FL_ISSUER_PASSPHRASE") and getpass.getpass("Repeat: ") != value:
+            sys.exit("Passphrases differ.")
+        return value
+
+    def write_key(priv: str) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.parent.chmod(0o700)
         path.write_text(priv)
         path.chmod(0o600)
-        print(f"Private key written to {path} (keep it there and in your password manager; never commit it).")
-        print("Public key (goes into ISSUER_PUBLIC_KEYS in src/financial_lens/licensing.py):")
-        print(pub)
+
+    if args.action == "restore-key":
+        from .backup import decrypt
+
+        if path.exists():
+            sys.exit(f"An issuer key already exists at {path}; it is not replaced.")
+        write_key(decrypt(Path(args.value or "issuer.key.enc").read_bytes(), passphrase(False)).decode())
+        print(f"Restored to {path}. Public key: {L.public_of(path.read_text().strip())}")
+        return 0
+    if args.action in ("keygen", "backup-key"):
+        from .backup import encrypt
+
+        if args.action == "keygen":
+            if path.exists():
+                sys.exit(f"An issuer key already exists at {path}; it is not replaced.")
+            write_key(L.keygen()[0])
+            print(f"Private key written to {path}.")
+        elif not path.exists():
+            sys.exit(f"No issuer key at {path}.")
+        priv = path.read_text().strip()
+        target = Path(args.value or "issuer.key.enc")
+        target.write_bytes(encrypt(priv.encode(), passphrase(True)))
+        print(f"Encrypted backup: {target} (AES-256-GCM, scrypt; safe to keep in a private repository).")
+        print("Also keep the passphrase, and ideally the key itself, in your password manager:")
+        print(f"  private key: {priv}")
+        print(f"Public key (goes into ISSUER_PUBLIC_KEYS): {L.public_of(priv)}")
         return 0
     if not path.exists():
         sys.exit(f"No issuer key at {path}. Run `financial-lens license keygen` first.")

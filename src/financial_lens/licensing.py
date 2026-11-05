@@ -35,7 +35,7 @@ PRICE_PER_USER_2Y = Decimal("10")
 PLANS = ("monthly", "2y")
 PREFIX = "FLK1"
 REQUEST_PREFIX = "FLR1"
-LICENSE_CONTACT = os.environ.get("FL_LICENSE_CONTACT", "https://finance.helveticlens.ch")
+LICENSE_CONTACT = os.environ.get("FL_LICENSE_CONTACT", "info@helveticlens.ch")
 
 # Public keys of the Helvetic Lens licence issuer (raw Ed25519, base64). Several may be listed while a key
 # is rotated. FL_LICENSE_PUBKEY adds one (used by tests and private builds).
@@ -130,6 +130,14 @@ def keygen() -> tuple[str, str]:
     priv = k.private_bytes(s.Encoding.Raw, s.PrivateFormat.Raw, s.NoEncryption())
     pub = k.public_key().public_bytes(s.Encoding.Raw, s.PublicFormat.Raw)
     return base64.b64encode(priv).decode(), base64.b64encode(pub).decode()
+
+
+def public_of(private_key_b64: str) -> str:
+    from cryptography.hazmat.primitives import serialization as s
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
+    k = Ed25519PrivateKey.from_private_bytes(base64.b64decode(private_key_b64))
+    return base64.b64encode(k.public_key().public_bytes(s.Encoding.Raw, s.PublicFormat.Raw)).decode()
 
 
 def issuer_key_path() -> Path:

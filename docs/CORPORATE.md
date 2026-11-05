@@ -88,15 +88,22 @@ afterwards. *Download CSV* gives the whole log for the auditor.
 
 ## Issuing keys (Helvetic Lens)
 
+Requests arrive at info@helveticlens.ch (the Licence page has an *E-mail the request* button).
+
 Once, on the issuer's own computer:
 
 ```bash
-financial-lens license keygen
+financial-lens license keygen issuer.key.enc
 ```
 
-This writes the private key to `~/.config/financial-lens-issuer/issuer.key` (keep a copy in a password manager;
-never commit it) and prints the public key, which goes into `ISSUER_PUBLIC_KEYS` in
-`src/financial_lens/licensing.py`. Builds made after that accept keys signed with it.
+This writes the private key to `~/.config/financial-lens-issuer/issuer.key`, asks for a passphrase and writes an
+encrypted backup (`issuer.key.enc`, AES-256-GCM with a scrypt-derived key) that is safe to keep in a private
+repository. It also prints the private and public key: put the private key and the passphrase in a password
+manager. The public key goes into `ISSUER_PUBLIC_KEYS` in `src/financial_lens/licensing.py`.
+
+On a new computer: `financial-lens license restore-key issuer.key.enc`.
+If the private key is ever lost or leaked, make a new one and add its public key next to the old one
+(or replace it, if leaked); keys already sold stay valid as long as their public key stays in the list.
 
 For each customer:
 
