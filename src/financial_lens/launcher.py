@@ -191,6 +191,7 @@ def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     background = "--service" in argv  # autostart: no browser window
     headless = "--no-tray" in argv or not _has_display()
+    local_db.no_console_windows()
     _logs()
     from .api import webui
 

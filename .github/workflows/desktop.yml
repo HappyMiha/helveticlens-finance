@@ -103,8 +103,14 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with: {path: out, merge-multiple: true}
+      - name: Keep the Android app (signed on the maintainer's machine) in the new release
+        env: {GH_TOKEN: "${{ github.token }}"}
+        run: |
+          gh release download --repo "${{ github.repository }}" --pattern FinancialLens-Android.apk --dir out/dist || true
+          ls -l out/dist
       - env: {GH_TOKEN: "${{ github.token }}"}
         run: |
+          APK=""; [ -f out/dist/FinancialLens-Android.apk ] && APK=out/dist/FinancialLens-Android.apk
           gh release create "${{ github.ref_name }}" --repo "${{ github.repository }}" --title "Financial Lens ${{ github.ref_name }}" \
             --notes "Desktop installers for Linux (AppImage), Windows (installer) and macOS (Apple silicon). Each build passed its self-test (OCR, embedded PostgreSQL, matching, window). The builds are not code-signed yet: Windows SmartScreen and macOS Gatekeeper will ask for confirmation on first start." \
-            out/dist/FinancialLens-x86_64.AppImage out/dist/FinancialLens-Setup-x64.exe out/dist/FinancialLens-macOS-arm64.dmg
+            out/dist/FinancialLens-x86_64.AppImage out/dist/FinancialLens-Setup-x64.exe out/dist/FinancialLens-macOS-arm64.dmg $APK

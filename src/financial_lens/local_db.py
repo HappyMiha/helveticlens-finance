@@ -15,6 +15,29 @@ from urllib.parse import parse_qs, unquote, urlparse
 _server = None
 
 
+def no_console_windows() -> None:
+    """Windows: child processes (pg_ctl, PostgreSQL, netsh, …) start without a console window.
+
+    The packaged app has no console of its own, so Windows gave pg_ctl.exe a new, visible one, and PostgreSQL
+    stayed attached to it: closing that window stopped the database. With CREATE_NO_WINDOW they share an
+    invisible console that nobody can close."""
+    if os.name != "nt":
+        return
+    import subprocess
+
+    if getattr(subprocess.Popen, "_fl_no_window", False):
+        return
+    original = subprocess.Popen.__init__
+
+    def init(self, *args, **kwargs):
+        if not kwargs.get("creationflags"):
+            kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+        original(self, *args, **kwargs)
+
+    subprocess.Popen.__init__ = init
+    subprocess.Popen._fl_no_window = True
+
+
 def data_dir() -> Path:
     if os.environ.get("FL_DATA"):
         return Path(os.environ["FL_DATA"]).expanduser()
@@ -45,6 +68,7 @@ def dsn() -> str:
         return os.environ["FL_DSN"]
     global _server
     if _server is None:
+        no_console_windows()
         import pgserver
 
         root = data_dir() / "postgres"

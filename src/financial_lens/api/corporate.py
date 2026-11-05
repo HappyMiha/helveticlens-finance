@@ -44,7 +44,7 @@ PAGES = ("/", "/ui", "/ui/")
 # Changes still possible when the ledger is read-only (licence missing): signing in and out, passwords,
 # the team (to get under the seat count) and the licence itself.
 ALWAYS_WRITABLE = ("/ui/login", "/ui/logout", "/ui/setup", "/ui/password", "/ui/users", "/ui/license", "/export", "/ask")
-ADMIN = ("/ui/users", "/ui/audit", "/ui/license", "/security/check", "/devices", "/mail/", "/ui/pair-phone", "/ui/phones",
+ADMIN = ("/ui/users", "/ui/audit", "/ui/license", "/security/check", "/devices", "/mail/", "/ui/pair-phone", "/ui/phones", "/ui/phone-firewall",
          "/ui/ai/install", "/ui/ai/cancel", "/ui/ai/toggle")
 READ_POSTS = ("/ask", "/ui/logout", "/ui/password")
 MEMBER_OK = re.compile(r"^/(ui/me|ui/logout|ui/password|members/[0-9a-f-]+/statement)$")

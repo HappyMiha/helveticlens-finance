@@ -305,10 +305,14 @@
         };
         qr.appendChild(mk('1 · Install the app', 'Scan with the phone camera to download the Android app. Allow installing from your browser; if Play Protect asks, choose More details → Install anyway.', p.app_svg));
         qr.appendChild(mk('2 · Connect this phone', 'In the app tap “Scan pairing code”. Works once, for 5 minutes, on the same Wi-Fi.', p.pair_svg));
+        qr.appendChild(card('3 · If the phone cannot connect', [
+          el('p', { class: 'muted', text: 'The phone connects to this computer at ' + p.address + ':' + p.port + '. Both must be on the same Wi-Fi (not a guest network), and a VPN on either side can get in the way.' })]));
+        firewallCard(p);
       }).catch(function (e) { clear(qr).appendChild(el('p', { text: e.message })); });
     } });
     v.appendChild(card('Phone', [el('p', { class: 'muted', text: 'Photograph and scan receipts with your Android phone; they arrive here while both are on the same Wi-Fi.' }), start, qr]));
     v.appendChild(card('Paired phones', [list]));
+    api('GET', '/ui/phone-network').then(firewallCard).catch(function () {});
     api('GET', '/ui/phones').then(function (ps) {
       clear(list).appendChild(ps.length ? table([['Name'], ['Paired'], ['Last seen'], ['', 'r']], ps.map(function (p) {
         return el('tr', {}, [el('td', { text: p.name + (p.revoked_at ? ' (revoked)' : '') }), el('td', { text: String(p.paired_at).slice(0, 16) }),
@@ -317,6 +321,27 @@
             api('DELETE', '/ui/phones/' + p.id).then(renderPhone); } })])]);
       })) : el('p', { class: 'muted', text: 'No phone paired yet.' }));
     });
+  }
+
+  function firewallCard(net) {
+    if (!net.windows || net.firewall_ok) return;
+    var box = document.getElementById('fw-card'); if (box) box.remove();
+    var msg = el('p', { class: 'muted', text: 'Windows Firewall blocks phones until you allow it once. Windows will ask for confirmation (an administrator password if you are not one).' });
+    box = card('Windows Firewall', [msg, el('button', { class: 'btn primary', text: 'Allow phones on this Wi-Fi', onclick: function () {
+      api('POST', '/ui/phone-firewall').then(function (r) {
+        msg.textContent = r.started ? 'Confirm in the Windows prompt. Checking…' : 'Windows did not start the change.';
+        var tries = 0, check = function () {
+          api('GET', '/ui/phone-network').then(function (n) {
+            if (n.firewall_ok) { msg.textContent = '✓ Phones on this Wi-Fi are allowed. Try pairing again.'; }
+            else if (++tries < 20) setTimeout(check, 1500);
+            else msg.textContent = 'Not allowed yet. Press the button again and choose “Yes” in the Windows prompt.';
+          });
+        };
+        setTimeout(check, 1500);
+      }).catch(function (x) { msg.textContent = x.message; });
+    } })]);
+    box.id = 'fw-card';
+    view().insertBefore(box, view().firstChild);
   }
 
   function renderSettings() {

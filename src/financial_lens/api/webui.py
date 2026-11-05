@@ -154,7 +154,28 @@ def make_router(get_lens) -> APIRouter:
         qrcode.make("https://github.com/HappyMiha/helveticlens-finance/releases/latest/download/FinancialLens-Android.apk",
                     image_factory=qrcode.image.svg.SvgPathImage, box_size=8).save(app_buf)
         return {"pair_svg": buf.getvalue().decode(), "app_svg": app_buf.getvalue().decode(),
-                "expires_at": offer["expires_at"]}
+                "expires_at": offer["expires_at"], **phone_network()}
+
+    def phone_network() -> dict:
+        from .. import winfirewall
+        from .mobile import lan_address
+
+        return {"address": lan_address(), "port": int(os.environ.get("FL_MOBILE_PORT", "8766")),
+                "windows": winfirewall.applies(), "firewall_ok": winfirewall.rule_present()}
+
+    @r.get("/ui/phone-network")
+    def phone_net() -> dict:
+        return phone_network()
+
+    @r.post("/ui/phone-firewall")
+    def phone_firewall(fl: FinancialLens = Depends(get_lens)) -> dict:
+        from .. import winfirewall
+
+        fl.authorize("configure")
+        started = winfirewall.allow(int(os.environ.get("FL_MOBILE_PORT", "8766")))
+        with fl.db.transaction():
+            fl._audit("firewall_allow_phones", "computer", "", {"started": started})
+        return {"started": started}
 
     @r.get("/ui/phones")
     def phones(fl: FinancialLens = Depends(get_lens)) -> list[dict]:
