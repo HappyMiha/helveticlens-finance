@@ -62,7 +62,9 @@ jobs:
           TD="$(brew --prefix)/share/tessdata"
           for l in deu fra ita; do curl -fsSL -o "$TD/$l.traineddata" "https://github.com/tesseract-ocr/tessdata_fast/raw/4.1.0/$l.traineddata"; done
           echo "FL_TESSDATA=$TD" >> $GITHUB_ENV
-      - run: pip install "pyinstaller>=6.11" ".[api,db,security,ocr,embedded]" "PySide6-Essentials>=6.8" openpyxl
+      # psycopg 3.1 links against libpq 16, the same major version as the embedded PostgreSQL, so the
+      # one libpq in the bundle serves both (newer psycopg needs libpq 17 symbols).
+      - run: pip install "pyinstaller>=6.11" ".[api,db,security,ocr,embedded]" "psycopg[binary]>=3.1.18,<3.2" "PySide6-Essentials>=6.8" openpyxl
       - run: pyinstaller --noconfirm --clean --distpath build/pyi/dist --workpath build/pyi/work packaging/financial-lens.spec
       - name: Self-test the build
         run: QT_QPA_PLATFORM=offscreen "build/pyi/dist/Financial Lens.app/Contents/MacOS/FinancialLens" --self-test selftest-macos.png
