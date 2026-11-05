@@ -26,9 +26,10 @@ def _invoice() -> bytes:
     from pathlib import Path
 
     font = ImageFont.truetype(str(Path(__file__).parent / "assets" / "DejaVuSans.ttf"), 30)
-    img = Image.new("RGB", (1240, 900), "white")
+    img = Image.new("RGB", (1240, 1100), "white")
     d = ImageDraw.Draw(img)
     for i, t in enumerate(["Elektrizitätswerk Limmattal AG", "Rechnung Nr. 4471", "Rechnungsdatum: 12.10.2026",
+                           "Netznutzung CHF 71.30", "Energie CHF 99.40", "MWST 8.1% CHF 13.80",
                            "Total zu bezahlen CHF 184.50", "Zahlbar bis 30.10.2026"]):
         d.text((80, 80 + i * 70), t, fill="black", font=font)
     buf = io.BytesIO()
