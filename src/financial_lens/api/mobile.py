@@ -85,6 +85,10 @@ def is_local_client(request: Request) -> bool:
 
 async def lan_gate(request: Request, call_next):
     """Phones on the LAN may use the upload page only."""
+    from . import webui
+
+    if webui.Settings.edition == "corporate":
+        return await call_next(request)  # the office server: every request signs in (api/corporate.py)
     path = request.url.path
     public = path in ("/m", "/health") or path.startswith(("/m/", "/mobile/v1/"))  # not "/members" etc.
     if not is_local_client(request) and not public:

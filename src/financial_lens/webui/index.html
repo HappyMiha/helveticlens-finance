@@ -20,6 +20,10 @@
       <a href="#/ask" data-nav="ask">Ask</a>
       <a href="#/phone" data-nav="phone">Phone</a>
       <a href="#/settings" data-nav="settings">Settings</a>
+      <a href="#/team" data-nav="team" data-corp="admin" hidden>Team</a>
+      <a href="#/audit" data-nav="audit" data-corp="admin" hidden>Audit log</a>
+      <a href="#/license" data-nav="license" data-corp="admin" hidden>Licence</a>
+      <a href="#/account" data-nav="account" data-corp="any" hidden>My account</a>
       <div class="side-foot" id="side-foot"></div>
     </nav>
     <div class="main">
@@ -42,6 +46,7 @@
         <label class="btn primary" for="file-input">Add documents</label>
         <input id="file-input" type="file" multiple hidden>
       </header>
+      <div id="licence-banner" class="banner" role="status" hidden></div>
       <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
       <main id="view" tabindex="-1"></main>
     </div>

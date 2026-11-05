@@ -360,6 +360,151 @@
     }).catch(function (e) { clear(sec).appendChild(el('p', { class: 'muted', text: e.message })); });
   }
 
+
+  // ------------------------------------------------------------ corporate edition
+  var ME = null;
+  function field(label, input) { return el('label', {}, [label, input]); }
+  function input(type, attrs) { return el('input', Object.assign({ type: type }, attrs || {})); }
+  function signOut() { api('POST', '/ui/logout').then(function () { location.hash = '#/overview'; location.reload(); }); }
+
+  function renderLogin(needsSetup, msg) {
+    document.body.classList.add('signed-out');
+    var v = clear(view()), err = el('p', { class: 'muted', text: msg || '' });
+    var login = input('text', { autocomplete: 'username', required: 'required' }), pw = input('password', { autocomplete: needsSetup ? 'new-password' : 'current-password' });
+    var code = input('text', { placeholder: 'XXXX-XXXX-XXXX-XXXX' }), name = input('text', { autocomplete: 'name' });
+    var go = function (e) {
+      e.preventDefault();
+      var req = needsSetup ? api('POST', '/ui/setup', { code: code.value, login: login.value, name: name.value, password: pw.value })
+        : api('POST', '/ui/login', { login: login.value, password: pw.value });
+      req.then(function (j) { CSRF = j.csrf; document.body.classList.remove('signed-out'); location.hash = '#/overview'; start(); })
+        .catch(function (x) { err.textContent = x.message; });
+    };
+    var kids = needsSetup
+      ? [el('h2', { text: 'Create the first administrator' }),
+         el('p', { class: 'muted', text: 'The setup code is printed in the server console and its log at start. It works once.' }),
+         field('Setup code', code), field('Your name', name), field('Login', login), field('Password (at least 10 characters)', pw)]
+      : [el('h2', { text: 'Sign in to Financial Lens' }), field('Login', login), field('Password', pw)];
+    var form = el('form', { class: 'card login', onsubmit: go }, kids.concat([el('button', { class: 'btn primary', type: 'submit', text: needsSetup ? 'Create and sign in' : 'Sign in' }), err]));
+    v.appendChild(form);
+    (needsSetup ? code : login).focus();
+  }
+
+  function licenceBanner(lic) {
+    var b = document.getElementById('licence-banner');
+    if (!lic) { b.hidden = true; return; }
+    var admin = ME && (ME.role === 'owner' || ME.role === 'admin');
+    var text = '';
+    if (lic.state === 'trial' && lic.days_left <= 30) text = 'Trial: ' + lic.days_left + ' days left. ';
+    else if (lic.state === 'active' && lic.days_left <= 30) text = 'The licence ends in ' + lic.days_left + ' days. ';
+    else if (!lic.writable) text = (lic.message || 'A licence key is needed.') + ' ';
+    b.hidden = !text; b.className = 'banner' + (lic.writable ? '' : ' warn');
+    clear(b).appendChild(document.createTextNode(text));
+    if (text && admin) b.appendChild(el('a', { href: '#/license', text: 'Get a licence key' }));
+  }
+
+  function renderTeam() {
+    var v = clear(view()), list = el('div', { class: 'scroll' }), err = el('p', { class: 'muted' });
+    var login = input('text'), name = input('text'), email = input('email'), pw = input('password', { autocomplete: 'new-password' }), role = el('select');
+    var add = el('form', { class: 'form', onsubmit: function (e) {
+      e.preventDefault();
+      api('POST', '/ui/users', { login: login.value, name: name.value, email: email.value, role: role.value, password: pw.value })
+        .then(function () { toast('Created ' + login.value + '. Give them the password in person.'); renderTeam(); })
+        .catch(function (x) { err.textContent = x.message; });
+    } }, [field('Name', name), field('Login', login), field('E-mail (for single sign-on)', email), field('Role', role),
+      field('First password', pw), el('button', { class: 'btn primary', type: 'submit', text: 'Add person' })]);
+    v.appendChild(card('People', [list]));
+    v.appendChild(card('Add a person', [add, err]));
+    api('GET', '/ui/users').then(function (d) {
+      d.roles.forEach(function (r) { role.appendChild(el('option', { value: r.id, text: r.label })); });
+      role.value = 'viewer';
+      var seats = d.seats ? d.active + ' of ' + d.seats + ' licensed users' : d.active + ' active users';
+      clear(list).appendChild(el('p', { class: 'muted', text: seats }));
+      list.appendChild(table([['Name'], ['Login'], ['Role'], ['Last sign-in'], ['', 'r']], d.users.map(function (u) {
+        var sel = el('select', { 'aria-label': 'Role of ' + u.name });
+        d.roles.forEach(function (r) { sel.appendChild(el('option', { value: r.id, text: r.label })); });
+        sel.value = u.role; if (u.id === d.me) sel.disabled = true;
+        sel.addEventListener('change', function () {
+          api('PATCH', '/ui/users/' + u.id, { role: sel.value }).then(function () { toast('Role changed.'); }).catch(function (x) { toast(x.message); sel.value = u.role; });
+        });
+        var acts = el('td', { class: 'r' });
+        if (u.id !== d.me) {
+          acts.appendChild(el('button', { class: 'btn small', text: 'Reset password', onclick: function () {
+            var p = window.prompt('New password for ' + u.login + ' (at least 10 characters):');
+            if (p) api('PATCH', '/ui/users/' + u.id, { password: p }).then(function () { toast('Password reset; their sessions ended.'); }).catch(function (x) { toast(x.message); });
+          } }));
+          acts.appendChild(document.createTextNode(' '));
+          acts.appendChild(el('button', { class: 'btn small', text: u.disabled_at ? 'Enable' : 'Disable', onclick: function () {
+            api('PATCH', '/ui/users/' + u.id, { disabled: !u.disabled_at }).then(renderTeam).catch(function (x) { toast(x.message); });
+          } }));
+        }
+        return el('tr', {}, [el('td', { text: u.name + (u.disabled_at ? ' (disabled)' : '') }), el('td', { text: u.login }), el('td', {}, [sel]),
+          el('td', { class: 'muted', text: u.last_login_at ? String(u.last_login_at).slice(0, 16).replace('T', ' ') : '—' }), acts]);
+      })));
+    }).catch(function (x) { clear(list).appendChild(el('p', { text: x.message })); });
+  }
+
+  function renderAudit() {
+    var v = clear(view()), out = el('div', { class: 'scroll' }), who = input('search', { placeholder: 'Person' }), what = el('select');
+    var load = function () {
+      var q = '/ui/audit?limit=500' + (who.value ? '&actor=' + encodeURIComponent(who.value) : '') + (what.value ? '&action=' + encodeURIComponent(what.value) : '');
+      api('GET', q).then(function (d) {
+        if (what.options.length <= 1) d.actions.forEach(function (a) { what.appendChild(el('option', { value: a, text: a })); });
+        clear(out).appendChild(el('p', { class: d.chain.ok ? 'st confirmed' : 'st needs_review',
+          text: d.chain.ok ? '● Chain intact: ' + d.chain.checked + ' entries verified, none changed or removed.' : '● Chain broken at entry ' + d.chain.broken_at + '.' }));
+        out.appendChild(table([['When'], ['Who'], ['What'], ['Details']], d.entries.map(function (e) {
+          return el('tr', {}, [el('td', { class: 'num', text: String(e.at).slice(0, 19).replace('T', ' ') }),
+            el('td', { text: e.actor_name ? e.actor_name + ' (' + e.actor_login + ')' : e.actor }),
+            el('td', { text: e.action + ' · ' + e.entity }), el('td', { class: 'muted mono', text: JSON.stringify(e.details) })]);
+        })));
+      }).catch(function (x) { clear(out).appendChild(el('p', { text: x.message })); });
+    };
+    what.appendChild(el('option', { value: '', text: 'All actions' }));
+    who.addEventListener('change', load); what.addEventListener('change', load);
+    v.appendChild(card('Audit log', [el('div', { class: 'form' }, [field('Person', who), field('Action', what),
+      el('a', { class: 'btn', href: '/ui/audit.csv', text: 'Download CSV' })]), out]));
+    load();
+  }
+
+  function renderLicense() {
+    var v = clear(view()), box = el('div'), key = el('textarea', { placeholder: 'FLK1.…', 'aria-label': 'Licence key' }), err = el('p', { class: 'muted' });
+    v.appendChild(card('Licence', [box]));
+    v.appendChild(card('Install a licence key', [key, el('button', { class: 'btn primary', text: 'Install key', onclick: function () {
+      api('POST', '/ui/license', { key: key.value }).then(function () { toast('Licence installed.'); start(); }).catch(function (x) { err.textContent = x.message; });
+    } }), err]));
+    api('GET', '/ui/license').then(function (l) {
+      var state = { trial: 'Trial', active: 'Licensed', trial_ended: 'Trial ended (read-only)', expired: 'Licence ended (read-only)',
+        over_seats: 'More users than licensed (read-only)', invalid: 'Key not valid (read-only)' }[l.state] || l.state;
+      var dl = el('dl');
+      [['Status', state], ['Trial', l.trial_started + ' – ' + l.trial_ends],
+        ['Licensed to', l.customer || '—'], ['Users', l.users + (l.seats ? ' of ' + l.seats : '')], ['Valid until', l.expires || (l.state === 'trial' ? l.trial_ends : '—')]]
+        .forEach(function (p) { dl.appendChild(el('dt', { text: p[0] })); dl.appendChild(el('dd', { text: p[1] })); });
+      clear(box).appendChild(el('div', { class: 'ev' }, [dl]));
+      if (l.message) box.appendChild(el('p', { text: l.message }));
+      box.appendChild(el('h4', { text: 'Prices for ' + Math.max(l.users, 1) + ' users' }));
+      box.appendChild(el('p', { text: 'CHF 1 per user per month (CHF ' + l.prices.monthly + ' per month), or CHF 10 per user for 2 years (CHF ' + l.prices['2y'] + ').' }));
+      if (l.request) {
+        box.appendChild(el('h4', { text: 'Request a key' }));
+        box.appendChild(el('p', { class: 'muted', text: 'Send this request code, the plan you want and the number of users to Helvetic Lens (' + l.contact + '). The key you receive works on this server only, and is checked here without any internet connection.' }));
+        var code = el('div', { class: 'ev' }, [el('code', { class: 'mono', text: l.request })]);
+        box.appendChild(code);
+        box.appendChild(el('button', { class: 'btn small', text: 'Copy request code', onclick: function () {
+          if (navigator.clipboard) navigator.clipboard.writeText(l.request).then(function () { toast('Copied.'); });
+        } }));
+      }
+    }).catch(function (x) { clear(box).appendChild(el('p', { text: x.message })); });
+  }
+
+  function renderAccount() {
+    var v = clear(view()), cur = input('password', { autocomplete: 'current-password' }), pw = input('password', { autocomplete: 'new-password' }), err = el('p', { class: 'muted' });
+    v.appendChild(card('My account', [el('p', { text: (ME.name || '') + ' · ' + ME.login + ' · ' + ME.role }),
+      el('form', { class: 'form', onsubmit: function (e) {
+        e.preventDefault();
+        api('POST', '/ui/password', { current: cur.value, password: pw.value }).then(function () { toast('Password changed. Please sign in again.'); setTimeout(function () { location.reload(); }, 1200); })
+          .catch(function (x) { err.textContent = x.message; });
+      } }, [field('Current password', cur), field('New password (at least 10 characters)', pw), el('button', { class: 'btn', type: 'submit', text: 'Change password' })]), err,
+      el('button', { class: 'btn', text: 'Sign out', onclick: signOut })]));
+  }
+
   // ------------------------------------------------------------ upload
   function upload(files) {
     if (!files.length) return;
@@ -374,10 +519,12 @@
 
   // ------------------------------------------------------------ routing
   var PAGES = { overview: renderOverview, inbox: renderInbox, documents: renderDocuments, transactions: renderTransactions,
-    analytics: renderAnalytics, ask: renderAsk, phone: renderPhone, settings: renderSettings };
+    analytics: renderAnalytics, ask: renderAsk, phone: renderPhone, settings: renderSettings,
+    team: renderTeam, audit: renderAudit, license: renderLicense, account: renderAccount };
   function route() {
     var page = (location.hash.replace(/^#\/?/, '').split('/')[0]) || 'overview';
     if (!PAGES[page]) page = 'overview';
+    if (ME && ME.role === 'member' && page !== 'account') { location.hash = '#/account'; return; }
     document.querySelectorAll('[data-nav]').forEach(function (a) { a.classList.toggle('on', a.getAttribute('data-nav') === page); });
     PAGES[page]();
   }
@@ -388,7 +535,10 @@
     }).catch(function () {});
   }
 
+  var started = false;
   function start() {
+    if (started) { boot(); return; }
+    started = true;
     ['period', 'mode', 'group'].forEach(function (id) {
       var s = document.getElementById(id);
       try { var saved = localStorage.getItem('fl-' + id); if (saved) s.value = saved; } catch (e) { /* no storage */ }
@@ -404,12 +554,31 @@
     window.addEventListener('hashchange', route);
     var t = null;
     window.addEventListener('resize', function () { clearTimeout(t); t = setTimeout(function () { if ((location.hash || '#/overview').indexOf('overview') >= 0 && state.tree) renderOverview(); }, 200); });
+    boot();
+  }
+  function boot() {
     api('GET', '/ui/me').then(function (me) {
       CSRF = me.csrf;
       var org = (me.organizations || []).find(function (o) { return o.id === me.org; });
-      document.getElementById('side-foot').textContent = (org ? org.name : '') + ' · ' + { local_only: 'L2 local only', swiss_hosted: 'L1 Swiss', cloud_ai: 'L0' }[me.privacy];
-      route(); refreshInboxCount();
-    }).catch(function (e) { clear(view()).appendChild(el('p', { class: 'empty', text: e.message })); });
+      var foot = clear(document.getElementById('side-foot'));
+      foot.appendChild(document.createTextNode((org ? org.name : '') + ' · ' + { local_only: 'L2 local only', swiss_hosted: 'L1 Swiss', cloud_ai: 'L0' }[me.privacy]));
+      if (me.edition === 'corporate') {
+        ME = me.user;
+        var admin = ME.role === 'owner' || ME.role === 'admin';
+        document.querySelectorAll('[data-corp]').forEach(function (a) { a.hidden = a.getAttribute('data-corp') === 'admin' && !admin; });
+        if (ME.role === 'member') document.querySelectorAll('[data-nav]').forEach(function (a) { if (a.getAttribute('data-nav') !== 'account') a.hidden = true; });
+        foot.appendChild(el('br'));
+        foot.appendChild(document.createTextNode(ME.name + ' · '));
+        foot.appendChild(el('button', { type: 'button', text: 'Sign out', onclick: signOut }));
+        licenceBanner(me.license);
+      }
+      route(); if (!ME || ME.role !== 'member') refreshInboxCount();
+    }).catch(function (e) {
+      fetch('/ui/edition', { credentials: 'same-origin' }).then(function (r) { return r.json(); }).then(function (ed) {
+        if (ed.edition === 'corporate') renderLogin(ed.needs_setup);
+        else clear(view()).appendChild(el('p', { class: 'empty', text: e.message }));
+      }).catch(function () { clear(view()).appendChild(el('p', { class: 'empty', text: e.message })); });
+    });
   }
 
   // The launch URL carries the key in the fragment (never sent to a server log); exchange it for a cookie.

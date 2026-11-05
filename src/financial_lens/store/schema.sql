@@ -404,4 +404,27 @@ CREATE TABLE IF NOT EXISTS mobile_nonces (
   PRIMARY KEY (device_id, nonce)
 );
 
-INSERT INTO schema_version (version) VALUES (1), (2), (3), (4), (5), (6) ON CONFLICT DO NOTHING;
+
+-- v7: corporate edition — logins, browser sessions on a shared server.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS login text;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS email text;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS password_hash text;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS disabled_at timestamptz;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS last_login_at timestamptz;
+CREATE UNIQUE INDEX IF NOT EXISTS users_login_key ON users (lower(login)) WHERE login IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS web_sessions (
+  token_sha256 char(64) PRIMARY KEY,
+  user_id uuid NOT NULL REFERENCES users(id),
+  organization_id uuid NOT NULL REFERENCES organizations(id),
+  csrf text NOT NULL,
+  via text NOT NULL DEFAULT 'password',  -- password · sso
+  ip text NOT NULL DEFAULT '',
+  user_agent text NOT NULL DEFAULT '',
+  created_at timestamptz NOT NULL DEFAULT now(),
+  last_seen_at timestamptz NOT NULL DEFAULT now(),
+  expires_at timestamptz NOT NULL
+);
+CREATE INDEX IF NOT EXISTS web_sessions_user ON web_sessions (user_id);
+
+INSERT INTO schema_version (version) VALUES (1), (2), (3), (4), (5), (6), (7) ON CONFLICT DO NOTHING;

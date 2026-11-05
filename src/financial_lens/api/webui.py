@@ -25,11 +25,12 @@ from pydantic import BaseModel
 from ..service import FinancialLens
 
 COOKIE = "fl_session"
-OPEN_PATHS = ("/ui/session", "/health")
+OPEN_PATHS = ("/ui/session", "/health", "/ui/edition")
 STATIC = Path(str(resources.files("financial_lens") / "webui"))
 
 
 class Settings:
+    edition = "personal"  # "corporate": many people sign in on one office server (api/corporate.py)
     require_auth = False  # switched on by the service launcher
     key: Optional[str] = None
     allowed_hosts: set[str] = {"127.0.0.1", "localhost", "[::1]"}
@@ -118,15 +119,26 @@ def make_router(get_lens) -> APIRouter:
     def me(request: Request, fl: FinancialLens = Depends(get_lens)) -> dict:
         from .. import privacy
 
-        return {"csrf": csrf_for(Settings.key) if Settings.key else "", "org": fl.org,
-                "organizations": fl.organizations(), "privacy": fl.privacy_level(),
-                "network_guard": privacy.guard_active(), "ai_assist": fl.ai_assist()}
+        out = {"csrf": csrf_for(Settings.key) if Settings.key else "", "org": fl.org,
+               "organizations": fl.organizations(), "privacy": fl.privacy_level(),
+               "network_guard": privacy.guard_active(), "ai_assist": fl.ai_assist(), "edition": Settings.edition}
+        if Settings.edition == "corporate":
+            from .. import licensing
+
+            user = getattr(request.state, "fl_user", None) or {}
+            lic = licensing.status(fl)
+            out.update(csrf=user.get("csrf", ""), user={k: user.get(k) for k in ("id", "login", "name", "role", "via")},
+                       organizations=[o for o in out["organizations"] if o["id"] == fl.org],
+                       license={"state": lic.state, "writable": lic.writable, "days_left": lic.days_left,
+                                "message": lic.message, "trial_ends": lic.trial_ends, "expires": lic.expires})
+        return out
 
     # ----------------------------------------------------------- phone pairing
     @r.post("/ui/pair-phone")
     def pair_phone(fl: FinancialLens = Depends(get_lens)) -> dict:
         import io
 
+        fl.authorize("configure")
         import qrcode
         import qrcode.image.svg
 
@@ -196,8 +208,13 @@ def make_router(get_lens) -> APIRouter:
     def ai_toggle(body: Toggle, fl: FinancialLens = Depends(get_lens)) -> dict:
         from ..ai import local_model
 
+        fl.authorize("configure")
         if body.on:
             url = os.environ.get("FL_MODEL_URL") or local_model.start()
+            if Settings.edition == "corporate":
+                from . import app as api
+
+                api.pool.each(lambda other: other.use_local_model(url, "apertus-8b"))
             fl.use_local_model(url, "apertus-8b")
         else:
             local_model.stop()

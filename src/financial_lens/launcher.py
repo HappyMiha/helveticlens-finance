@@ -230,3 +230,54 @@ def port_free(port: int = PORT) -> bool:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
+
+# ------------------------------------------------------------------ corporate edition
+def corporate_env(org: str = "") -> Path:
+    """Database, data folder and organisation of the corporate server, shared by `server`, `user` and `license`.
+    The organisation's name is fixed at the first start, so a later start without --org opens the same books."""
+    data = local_db.data_dir()
+    os.environ.setdefault("FL_DATA", str(data))
+    os.environ["FL_DSN"] = local_db.dsn()
+    marker = data / "corporate-org"
+    if marker.exists():
+        os.environ["FL_ORG"] = marker.read_text(encoding="utf-8").strip()
+    else:
+        name = org or os.environ.get("FL_ORG") or "Company"
+        data.mkdir(parents=True, exist_ok=True)
+        marker.write_text(name, encoding="utf-8")
+        os.environ["FL_ORG"] = name
+    os.environ.setdefault("FL_ORG_KIND", "business")
+    return data
+
+
+def serve_corporate(host: str = "0.0.0.0", port: int = PORT, org: str = "", certfile: str = "", keyfile: str = "") -> int:
+    """One server for a whole company: people sign in from their browsers (see docs/CORPORATE.md)."""
+    import uvicorn
+
+    from . import corporate, licensing
+    from .api import app as api
+    from .api import corporate as web_corp
+    from .api import webui
+
+    _logs()
+    data = corporate_env(org)
+    webui.Settings.edition = "corporate"
+    web_corp.Config.data_dir = str(data)
+    if certfile:
+        web_corp.Config.secure_cookie = True
+    fl = api._lens()
+    st = licensing.status(fl)
+    print(f"Financial Lens corporate server · organisation “{os.environ.get('FL_ORG', 'Personal')}” · "
+          f"licence: {st.state}" + (f", {st.days_left} days left" if st.state in ("trial", "active") else ""), flush=True)
+    if st.message:
+        print("  " + st.message, flush=True)
+    if not corporate.has_logins(fl):
+        code = corporate.setup_code(data)
+        print(f"  First start: open http://<this server>:{port}/ui and create the first administrator "
+              f"with the setup code {code}", flush=True)
+    print(f"Listening on {'https' if certfile else 'http'}://{host}:{port}/ui", flush=True)
+    kw = {"ssl_certfile": certfile, "ssl_keyfile": keyfile} if certfile else {}
+    uvicorn.run(api.app, host=host, port=port, log_level="warning", proxy_headers=True,
+                forwarded_allow_ips=os.environ.get("FL_SSO_TRUSTED_PROXIES", "127.0.0.1"), **kw)
+    return 0

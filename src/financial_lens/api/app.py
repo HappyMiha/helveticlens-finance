@@ -36,8 +36,70 @@ def _lens() -> FinancialLens:
     return lens
 
 
-def lens() -> FinancialLens:
-    return _lens()
+class LensPool:
+    """Corporate edition: one ledger connection per concurrent request, each running as its signed-in person."""
+
+    def __init__(self, size: int = int(os.environ.get("FL_POOL_SIZE", "8"))) -> None:
+        import queue
+        import threading
+
+        self.size, self.free, self.all, self.lock = size, queue.LifoQueue(), [], threading.Lock()
+
+    def _make(self) -> FinancialLens:
+        first = _lens()
+        fl = FinancialLens(first.dsn, first.files.root.parent, actor=first.actor)
+        fl.org = first.org
+        if first.ai is not None and first.ai.routes.get("understand"):
+            fl.use_local_model(first.ai.routes["understand"][0].base_url)
+        return fl
+
+    def get(self) -> FinancialLens:
+        import queue
+
+        try:
+            return self.free.get_nowait()
+        except queue.Empty:
+            pass
+        with self.lock:
+            if len(self.all) < self.size:
+                fl = self._make()
+                self.all.append(fl)
+                return fl
+        return self.free.get(timeout=60)
+
+    def put(self, fl: FinancialLens) -> None:
+        fl.as_user(None)
+        self.free.put(fl)
+
+    def borrow(self, user_id):
+        from contextlib import contextmanager
+
+        @contextmanager
+        def cm():
+            fl = self.get().as_user(user_id)
+            try:
+                yield fl
+            finally:
+                self.put(fl)
+        return cm()
+
+    def each(self, fn) -> None:
+        for fl in [_lens(), *self.all]:
+            fn(fl)
+
+
+pool = LensPool()
+
+
+def lens():
+    from . import corporate
+    from . import webui
+
+    if webui.Settings.edition != "corporate":
+        yield _lens()
+        return
+    with pool.borrow(corporate.current_user.get()) as fl:
+        yield fl
 
 
 def _period(start: Optional[date], end: Optional[date]) -> tuple[date, date]:
@@ -388,9 +450,19 @@ app.include_router(_mv1.make_router(lens))
 
 # ----------------------------------------------------------- local web interface
 from . import webui as _web  # noqa: E402
+from . import corporate as _corp  # noqa: E402
 
-app.middleware("http")(_web.guard)
+_corp_guard = _corp.make_guard(pool)
+
+
+async def _edition_guard(request, call_next):
+    if _web.Settings.edition == "corporate":
+        return await _corp_guard(request, call_next)
+    return await _web.guard(request, call_next)
+
+app.middleware("http")(_edition_guard)
 app.include_router(_web.make_router(lens))
+app.include_router(_corp.make_router(lens, pool))
 
 
 @app.get("/ui/transactions")

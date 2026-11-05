@@ -11,6 +11,13 @@
   financial-lens check                     security self-check
   financial-lens privacy L0|L1|L2          set the privacy level
 
+Corporate edition (one server for a company, see docs/CORPORATE.md):
+  financial-lens server [--host 0.0.0.0] [--org "Muster AG"]   serve the office network, people sign in
+  financial-lens user add LOGIN --name "…" --role admin        create a login (password is asked)
+  financial-lens user list | passwd LOGIN | disable LOGIN
+  financial-lens license status | request | install KEY
+  financial-lens license keygen | issue REQUEST --plan monthly|2y --seats N [--months M]   (Helvetic Lens only)
+
 Configuration: FL_DSN, FL_DATA, FL_ORG, FL_CONFIG (JSON with "level", "providers", "routes").
 """
 
@@ -99,7 +106,33 @@ def main(argv=None) -> int:
     pr.add_argument("--name", default="Phone")
     pv = sub.add_parser("privacy")
     pv.add_argument("level", choices=["L0", "L1", "L2"])
+    srv = sub.add_parser("server", help="corporate edition: one server for a company, people sign in")
+    srv.add_argument("--host", default=os.environ.get("FL_HOST", "0.0.0.0"))
+    srv.add_argument("--port", type=int, default=int(os.environ.get("FL_PORT", "8765")))
+    srv.add_argument("--org", default=os.environ.get("FL_ORG", ""), help="organisation name (kept after the first start)")
+    srv.add_argument("--cert", default=os.environ.get("FL_TLS_CERT", ""), help="TLS certificate (PEM) for HTTPS")
+    srv.add_argument("--key", default=os.environ.get("FL_TLS_KEY", ""), help="TLS private key (PEM)")
+    us = sub.add_parser("user", help="corporate edition: logins")
+    us.add_argument("action", choices=["add", "list", "passwd", "disable", "enable"])
+    us.add_argument("login", nargs="?")
+    us.add_argument("--name", default="")
+    us.add_argument("--email", default="")
+    us.add_argument("--role", default="viewer", choices=["owner", "admin", "editor", "viewer", "member"])
+    li = sub.add_parser("license", help="corporate edition: licence")
+    li.add_argument("action", choices=["status", "request", "install", "keygen", "issue"])
+    li.add_argument("value", nargs="?", help="the key (install) or the request code (issue)")
+    li.add_argument("--plan", choices=["monthly", "2y"], default="monthly")
+    li.add_argument("--seats", type=int, default=0)
+    li.add_argument("--months", type=int, default=12)
+    li.add_argument("--customer", default=None)
     args = p.parse_args(argv)
+
+    if args.cmd == "server":
+        from .launcher import serve_corporate
+
+        return serve_corporate(args.host, args.port, args.org, args.cert, args.key)
+    if args.cmd == "license" and args.action in ("keygen", "issue"):
+        return _issuer(args)
 
     if args.cmd == "serve":
         import uvicorn
@@ -154,6 +187,10 @@ def main(argv=None) -> int:
         from .desktop.main import main as desktop
 
         return desktop()
+    if args.cmd in ("user", "license"):
+        from .launcher import corporate_env
+
+        corporate_env()
     lens = _lens()
     if args.cmd == "init":
         print(f"Ready: organisation {lens.org}, privacy {lens.privacy_level()}")
@@ -220,6 +257,85 @@ def main(argv=None) -> int:
     elif args.cmd == "privacy":
         lens.set_privacy_level(args.level)
         print("Privacy level", args.level)
+    elif args.cmd == "user":
+        return _users(lens, args)
+    elif args.cmd == "license":
+        from . import licensing as L
+
+        if args.action == "install":
+            p = L.install_key(lens, args.value or input("Licence key: "))
+            print(f"Installed: {p['customer']}, {p['seats']} users, {p['plan']}, until {p['expires']}")
+        elif args.action == "request":
+            print("Send this request code to Helvetic Lens to receive a licence key:")
+            print(L.request_code(lens))
+        st = L.status(lens)
+        print(f"Licence: {st.state} · {st.users} active users" + (f" of {st.seats}" if st.seats else "")
+              + (f" · {st.days_left} days left" if st.state in ("trial", "active") else ""))
+        if st.message:
+            print(st.message)
+        print(f"Price for {max(st.users, 1)} users: CHF {st.prices['monthly']} per month, or CHF {st.prices['2y']} for 2 years")
+    return 0
+
+
+def _users(lens, args) -> int:
+    from . import corporate as C
+
+    def pw(login: str) -> str:
+        a = os.environ.get("FL_NEW_PASSWORD") or getpass.getpass(f"Password for {login}: ")
+        if not os.environ.get("FL_NEW_PASSWORD") and getpass.getpass("Repeat: ") != a:
+            sys.exit("Passwords differ.")
+        return a
+
+    def find(login: str) -> dict:
+        for u in C.users(lens):
+            if u["login"].casefold() == (login or "").casefold():
+                return u
+        sys.exit(f"No user {login!r}.")
+
+    if args.action == "list":
+        for u in C.users(lens):
+            print(f"{u['login']:<24} {u['role']:<8} {u['name']}" + ("  (disabled)" if u["disabled_at"] else ""))
+    elif args.action == "add":
+        if not args.login:
+            sys.exit("financial-lens user add LOGIN --name NAME --role ROLE")
+        C.create_user(lens, args.login, args.name or args.login, args.role, pw(args.login), args.email)
+        print(f"Created {args.login} ({args.role}).")
+    elif args.action == "passwd":
+        C.set_password(lens, find(args.login)["id"], pw(args.login))
+        print("Password changed; the person's open sessions were ended.")
+    else:
+        C.update_user(lens, find(args.login)["id"], disabled=args.action == "disable")
+        print(f"{args.login}: {args.action}d.")
+    return 0
+
+
+def _issuer(args) -> int:
+    """Helvetic Lens side: make the issuer key once, then sign keys for customers' request codes."""
+    from . import licensing as L
+
+    path = L.issuer_key_path()
+    if args.action == "keygen":
+        if path.exists():
+            sys.exit(f"An issuer key already exists at {path}; it is not replaced.")
+        priv, pub = L.keygen()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.parent.chmod(0o700)
+        path.write_text(priv)
+        path.chmod(0o600)
+        print(f"Private key written to {path} (keep it there and in your password manager; never commit it).")
+        print("Public key (goes into ISSUER_PUBLIC_KEYS in src/financial_lens/licensing.py):")
+        print(pub)
+        return 0
+    if not path.exists():
+        sys.exit(f"No issuer key at {path}. Run `financial-lens license keygen` first.")
+    code = args.value or input("Request code: ")
+    req = L.read_request(code)
+    seats = args.seats or max(int(req.get("users", 1)), 1)
+    key = L.issue(path.read_text().strip(), code, args.plan, seats, args.months, args.customer)
+    months = 24 if args.plan == "2y" else args.months
+    print(f"Customer: {args.customer or req.get('org')} · {seats} users · {args.plan} · {months} months · "
+          f"price CHF {L.price(args.plan, seats, months)}")
+    print(key)
     return 0
 
 

@@ -10,6 +10,9 @@ original file.
 
 **Status:** Phases 1–4 of the specification implemented and tested (39 tests on PostgreSQL); not yet packaged for download. Landing page: <https://finance.helveticlens.ch>.
 
+**Corporate edition:** one server for a company, people sign in with their own logins and roles, full audit log;
+3 months free, then CHF 1 per user per month or CHF 10 per user for 2 years. See [docs/CORPORATE.md](docs/CORPORATE.md).
+
 See [specification](docs/SPECIFICATION.md), [§16 acceptance](docs/PHASE1_ACCEPTANCE.md), [decisions](docs/DECISIONS.md), [security](docs/SECURITY.md), [deployment](docs/DEPLOYMENT.md).
 
 ## Principles
@@ -34,7 +37,8 @@ See [specification](docs/SPECIFICATION.md), [§16 acceptance](docs/PHASE1_ACCEPT
 | `src/financial_lens/analytics.py`, `assistant.py` | Periods, cash flow, recurring, unpaid; natural-language questions |
 | `src/financial_lens/orgs.py`, `reports.py` | Cooperatives, roles, budgets, allocation; reports and full export |
 | `src/financial_lens/privacy.py`, `backup.py`, `security.py` | L0/L1/L2 modes, encrypted backups, self-check |
-| `src/financial_lens/api` | Local FastAPI service (127.0.0.1) |
+| `src/financial_lens/api` | Local FastAPI service (127.0.0.1); `api/corporate.py` sign-in for the corporate server |
+| `src/financial_lens/corporate.py`, `licensing.py` | Corporate edition: logins, sessions, team, audit; trial and signed licence keys |
 | `src/financial_lens/desktop` | PySide6 desktop shell |
 | `site/` | Static landing page for finance.helveticlens.ch |
 | `deploy/` | Container and tunnel for the landing page |
