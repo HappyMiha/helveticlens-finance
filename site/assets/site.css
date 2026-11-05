@@ -86,7 +86,7 @@ section { padding: var(--space-5) 0; border-top: 1px solid var(--line); }
   text-align: left; font: inherit; color: var(--text-primary); cursor: pointer; overflow: hidden;
   transition: filter var(--motion-fast) var(--hl-ease);
 }
-.tile:hover { filter: brightness(1.18); }
+.tile:hover { box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--text-primary) 55%, transparent); }
 .tile strong { font-size: var(--type-label); line-height: 1.2; }
 .tile span { font-size: var(--type-meta); color: var(--text-secondary); font-variant-numeric: tabular-nums; }
 .tile.leaf { cursor: pointer; }
@@ -135,3 +135,21 @@ ol.steps { margin: 0; padding-left: 1.4em; display: grid; gap: var(--space-2); }
 ol.steps li { padding-left: 4px; }
 img.shot { display: block; width: 100%; max-width: 560px; height: auto; margin-top: 10px; border: 1px solid var(--line); border-radius: 12px; }
 img.shot.phone { max-width: 220px; }
+
+/* Treemap hues: same warm expense palette as the desktop app (§6.1). */
+:root { --tm-1: #7a2f2a; --tm-2: #8a4127; --tm-3: #6f3a2c; --tm-4: #93502a; --tm-5: #5f2f2f; }
+.tile { color: #f3efec; }
+.tile span { color: color-mix(in srgb, #f3efec 78%, transparent); }
+.tile.compact strong, .tile.compact span { display: none; }
+.tile.st-unconfirmed { outline: 2px dashed color-mix(in srgb, var(--text-primary) 70%, transparent); outline-offset: -5px; }
+.tile.st-review { outline: 2px solid var(--warning); outline-offset: -4px; }
+.legend { list-style: none; display: flex; flex-wrap: wrap; gap: 6px 18px; margin: 6px 0 0; padding: 0; }
+.legend li { display: inline-flex; align-items: center; gap: 8px; }
+.lg { width: 16px; height: 12px; border-radius: 2px; background: var(--tm-1); display: inline-block; }
+.lg-unconfirmed { outline: 2px dashed var(--text-secondary); outline-offset: -3px; }
+.lg-review { outline: 2px solid var(--warning); outline-offset: -2px; }
+/* Mobile: min-height combined with aspect-ratio widened the treemap beyond the screen. */
+.treemap { min-height: 0; max-width: 100%; }
+.demo > * { min-width: 0; }
+@media (max-width: 600px) { .treemap { aspect-ratio: 1 / 1.15; } }
+@media (max-width: 420px) { .brand small { display: none; } }

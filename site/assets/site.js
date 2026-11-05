@@ -42,6 +42,8 @@
       g2: 'Open the downloaded file from the notification or the Files app. If Android asks, allow installing from this source. If Google Play Protect warns about an unknown developer, tap “More details” → “Install anyway”.',
       g3: 'On your computer, open Financial Lens 0.6.2 or newer and click “Pair phone”. A window with two codes appears.',
       g4: 'In the phone app tap “Scan pairing code” and point it at the code “Connect this phone”. From then on, photos and scans go to your computer whenever both are on the same Wi-Fi.',
+      Housing: 'Housing', Electricity: 'Electricity', Transport: 'Transport', PublicTransport: 'Public transport', Insurance: 'Insurance', HealthInsurance: 'Health insurance', Healthcare: 'Healthcare',
+      lgConfirmed: 'Confirmed by document and bank', lgUnconfirmed: 'Not yet confirmed', lgReview: 'Needs review',
       roadNote: 'Not yet available: accounts, live bank connections and code-signed installers.',
       all: 'All spending', total: 'Total', records: 'records', sample: 'Sample data',
       document: 'Document', location: 'Location', method: 'Method', confidence: 'Confidence',
@@ -50,7 +52,7 @@
       ocr: 'OCR', qr: 'QR-bill (structured)', manual: 'Manual entry', camt: 'camt.053 statement',
       byRef: 'QR reference identical on invoice and payment', byAmount: 'Same amount, booked within the date window',
       Home: 'Home', Rent: 'Rent', Energy: 'Energy', Food: 'Food', Groceries: 'Groceries', Restaurants: 'Restaurants',
-      Mobility: 'Mobility', Transport: 'Public transport', Health: 'Health', Insurance: 'Health insurance', Pharmacy: 'Pharmacy'
+      Mobility: 'Mobility', Pharmacy: 'Pharmacy'
     },
     'de-CH': {
       skip: 'Zum Inhalt', language: 'Sprache', status: 'Phasen 1–4 umgesetzt · Open Source',
@@ -91,6 +93,8 @@
       g2: 'Öffnen Sie die heruntergeladene Datei aus der Benachrichtigung oder der App «Dateien». Wenn Android fragt, erlauben Sie die Installation aus dieser Quelle. Warnt Google Play Protect vor einem unbekannten Entwickler, tippen Sie auf «Weitere Details» → «Trotzdem installieren».',
       g3: 'Öffnen Sie auf dem Computer Financial Lens 0.6.2 oder neuer und klicken Sie auf «Pair phone». Ein Fenster mit zwei Codes erscheint.',
       g4: 'Tippen Sie in der Handy-App auf «Scan pairing code» und richten Sie die Kamera auf den Code «Connect this phone». Danach gelangen Fotos und Scans auf Ihren Computer, sobald beide im selben WLAN sind.',
+      Housing: 'Wohnen', Electricity: 'Strom', Transport: 'Mobilität', PublicTransport: 'Öffentlicher Verkehr', Insurance: 'Versicherungen', HealthInsurance: 'Krankenkasse', Healthcare: 'Gesundheit',
+      lgConfirmed: 'Durch Beleg und Bank bestätigt', lgUnconfirmed: 'Noch nicht bestätigt', lgReview: 'Prüfen',
       roadNote: 'Noch nicht verfügbar: Konten, direkte Bankanbindungen und signierte Installationsprogramme.',
       all: 'Alle Ausgaben', total: 'Total', records: 'Einträge', sample: 'Beispieldaten',
       document: 'Dokument', location: 'Fundstelle', method: 'Methode', confidence: 'Konfidenz',
@@ -99,7 +103,7 @@
       ocr: 'OCR', qr: 'QR-Rechnung (strukturiert)', manual: 'Manueller Eintrag', camt: 'camt.053-Auszug',
       byRef: 'QR-Referenz auf Rechnung und Zahlung identisch', byAmount: 'Gleicher Betrag, im Datumsfenster gebucht',
       Home: 'Wohnen', Rent: 'Miete', Energy: 'Energie', Food: 'Essen', Groceries: 'Lebensmittel', Restaurants: 'Restaurants',
-      Mobility: 'Mobilität', Transport: 'Öffentlicher Verkehr', Health: 'Gesundheit', Insurance: 'Krankenkasse', Pharmacy: 'Apotheke'
+      Mobility: 'Mobilität', Pharmacy: 'Apotheke'
     },
     'fr-CH': {
       skip: 'Aller au contenu', language: 'Langue', status: 'Phases 1 à 4 réalisées · open source',
@@ -140,6 +144,8 @@
       g2: 'Ouvrez le fichier téléchargé depuis la notification ou l’app « Fichiers ». Si Android le demande, autorisez l’installation depuis cette source. Si Google Play Protect signale un développeur inconnu, touchez « Plus de détails » → « Installer quand même ».',
       g3: 'Sur l’ordinateur, ouvrez Financial Lens 0.6.2 ou plus récent et cliquez sur « Pair phone ». Une fenêtre avec deux codes s’affiche.',
       g4: 'Dans l’app du téléphone, touchez « Scan pairing code » et visez le code « Connect this phone ». Ensuite, photos et scans arrivent sur votre ordinateur dès que les deux sont sur le même Wi-Fi.',
+      Housing: 'Logement', Electricity: 'Électricité', Transport: 'Transports', PublicTransport: 'Transports publics', Insurance: 'Assurances', HealthInsurance: 'Caisse maladie', Healthcare: 'Santé',
+      lgConfirmed: 'Confirmé par justificatif et banque', lgUnconfirmed: 'Pas encore confirmé', lgReview: 'À vérifier',
       roadNote: 'Pas encore disponible : comptes, connexions bancaires directes et installateurs signés.',
       all: 'Toutes les dépenses', total: 'Total', records: 'écritures', sample: 'Données d’exemple',
       document: 'Document', location: 'Emplacement', method: 'Méthode', confidence: 'Confiance',
@@ -148,7 +154,7 @@
       ocr: 'OCR', qr: 'QR-facture (structurée)', manual: 'Saisie manuelle', camt: 'Relevé camt.053',
       byRef: 'Référence QR identique sur la facture et le paiement', byAmount: 'Même montant, comptabilisé dans la période',
       Home: 'Logement', Rent: 'Loyer', Energy: 'Énergie', Food: 'Alimentation', Groceries: 'Courses', Restaurants: 'Restaurants',
-      Mobility: 'Mobilité', Transport: 'Transports publics', Health: 'Santé', Insurance: 'Caisse maladie', Pharmacy: 'Pharmacie'
+      Mobility: 'Mobilité', Pharmacy: 'Pharmacie'
     },
     'it-CH': {
       skip: 'Vai al contenuto', language: 'Lingua', status: 'Fasi 1–4 realizzate · open source',
@@ -189,6 +195,8 @@
       g2: 'Apra il file scaricato dalla notifica o dall’app «File». Se Android lo chiede, consenta l’installazione da questa fonte. Se Google Play Protect segnala uno sviluppatore sconosciuto, tocchi «Altri dettagli» → «Installa comunque».',
       g3: 'Sul computer apra Financial Lens 0.6.2 o più recente e clicchi «Pair phone». Compare una finestra con due codici.',
       g4: 'Nell’app del telefono tocchi «Scan pairing code» e inquadri il codice «Connect this phone». Da allora foto e scansioni arrivano sul computer quando entrambi sono sulla stessa Wi-Fi.',
+      Housing: 'Abitazione', Electricity: 'Elettricità', Transport: 'Trasporti', PublicTransport: 'Trasporti pubblici', Insurance: 'Assicurazioni', HealthInsurance: 'Cassa malati', Healthcare: 'Salute',
+      lgConfirmed: 'Confermato da documento e banca', lgUnconfirmed: 'Non ancora confermato', lgReview: 'Da verificare',
       roadNote: 'Non ancora disponibili: account, collegamenti bancari diretti e programmi d’installazione firmati.',
       all: 'Tutte le spese', total: 'Totale', records: 'registrazioni', sample: 'Dati di esempio',
       document: 'Documento', location: 'Posizione', method: 'Metodo', confidence: 'Affidabilità',
@@ -197,7 +205,7 @@
       ocr: 'OCR', qr: 'QR-fattura (strutturata)', manual: 'Inserimento manuale', camt: 'Estratto camt.053',
       byRef: 'Riferimento QR identico su fattura e pagamento', byAmount: 'Stesso importo, contabilizzato nel periodo',
       Home: 'Abitazione', Rent: 'Affitto', Energy: 'Energia', Food: 'Alimentazione', Groceries: 'Spesa', Restaurants: 'Ristoranti',
-      Mobility: 'Mobilità', Transport: 'Trasporti pubblici', Health: 'Salute', Insurance: 'Cassa malati', Pharmacy: 'Farmacia'
+      Mobility: 'Mobilità', Pharmacy: 'Farmacia'
     },
     'rm': {
       skip: 'Al cuntegn', language: 'Lingua', status: 'Fasas 1–4 realisadas · open source',
@@ -238,6 +246,8 @@
       g2: 'Avri la datoteca telechargiada da la communicaziun u da l’app «Datotecas». Sche Android dumonda, permettai l’installaziun da questa funtauna. Sche Google Play Protect avertescha d’in sviluppader nunenconuschent, smatgai «Ulteriurs detagls» → «Installar tuttina».',
       g3: 'Sin il computer avri Financial Lens 0.6.2 u pli nov e cliccai «Pair phone». I cumpara ina fanestra cun dus codes.',
       g4: 'En l’app dal telefonin smatgai «Scan pairing code» e drizzai la camera sin il code «Connect this phone». Da qua davent van fotos e scans sin Voss computer, cura ch’ils dus èn en la medema Wi-Fi.',
+      Housing: 'Abitar', Electricity: 'Electricitad', Transport: 'Traffic', PublicTransport: 'Traffic public', Insurance: 'Assicuranzas', HealthInsurance: 'Cassa da malsauns', Healthcare: 'Sanadad',
+      lgConfirmed: 'Confermà tras document e banca', lgUnconfirmed: 'Anc betg confermà', lgReview: 'Da verifitgar',
       roadNote: 'Anc betg disponibel: contos, colliaziuns bancaras directas e programs d’installaziun signads.',
       all: 'Tut las expensas', total: 'Total', records: 'inscripziuns', sample: 'Datas d’exempel',
       document: 'Document', location: 'Posiziun', method: 'Metoda', confidence: 'Fidanza',
@@ -246,17 +256,17 @@
       ocr: 'OCR', qr: 'Quint QR (structurà)', manual: 'Endataziun manuala', camt: 'Extract camt.053',
       byRef: 'Referenza QR identica sin quint e pajament', byAmount: 'Medem import, registrà en la perioda',
       Home: 'Abitar', Rent: 'Fittanza', Energy: 'Energia', Food: 'Nutriment', Groceries: 'Victualias', Restaurants: 'Ustarias',
-      Mobility: 'Mobilitad', Transport: 'Traffic public', Health: 'Sanadad', Insurance: 'Cassa da malsauns', Pharmacy: 'Apoteca'
+      Mobility: 'Mobilitad', Pharmacy: 'Apoteca'
     }
   };
 
   // Fictional sample: amounts in CHF, each leaf is a record with its evidence.
   var DATA = { key: 'all', children: [
-    { key: 'Home', children: [
+    { key: 'Housing', children: [
       { key: 'Rent', records: [
         { id: 'R-101', label: 'Wohnbau Genossenschaft Sihlfeld', amount: 1850.00, date: '2026-10-01', method: 'qr', doc: 'qr-bill_2026-10_miete.pdf', loc: 'QR code, payment part', conf: null,
           quote: 'SPC · 0200 · CH44 3199 9123 0008 8901 2 · 1850.00 CHF · QRR 21 00000 00003 13947 14300 09017', pay: { date: '2026-09-30', ref: 'camt.053 Ntry[2]', rule: 'byRef' } } ] },
-      { key: 'Energy', records: [
+      { key: 'Electricity', records: [
         { id: 'R-102', label: 'Elektrizitätswerk (fictional)', amount: 129.40, date: '2026-10-12', method: 'ocr', doc: 'IMG_2041.jpg', loc: 'page 1, lines 18–21', conf: 0.94,
           quote: 'Total zu bezahlen   CHF 129.40\nZahlbar bis 30.10.2026', pay: { date: '2026-10-28', ref: 'camt.053 Ntry[9]', rule: 'byAmount' } } ] } ] },
     { key: 'Food', children: [
@@ -267,16 +277,17 @@
         { id: 'R-203', label: 'Supermarket receipt', amount: 112.85, date: '2026-10-25', method: 'ocr', doc: 'receipt_2026-10-25.pdf', loc: 'page 1, line 44', conf: 0.91,
           quote: 'Total       112.85', pay: { date: '2026-10-25', ref: 'camt.053 Ntry[12]', rule: 'byAmount' } } ] },
       { key: 'Restaurants', records: [
-        { id: 'R-204', label: 'Café receipt', amount: 46.00, date: '2026-10-09', method: 'ocr', doc: 'IMG_2033.jpg', loc: 'page 1, line 12', conf: 0.79,
-          quote: 'Summe CHF 46.00', pay: { date: '2026-10-09', ref: 'camt.053 Ntry[4]', rule: 'byAmount' } } ] } ] },
-    { key: 'Mobility', children: [
-      { key: 'Transport', records: [
+        { id: 'R-204', label: 'Café receipt', amount: 46.00, date: '2026-10-09', method: 'ocr', doc: 'IMG_2033.jpg', loc: 'page 1, line 12', conf: 0.62, review: true,
+          quote: 'Summe CHF 46.OO', pay: null } ] } ] },
+    { key: 'Transport', children: [
+      { key: 'PublicTransport', records: [
         { id: 'R-301', label: 'Half-fare travelcard renewal', amount: 190.00, date: '2026-10-03', method: 'ocr', doc: 'ticket_2026-10-03.pdf', loc: 'page 1, line 7', conf: 0.97,
           quote: 'Preis CHF 190.00', pay: { date: '2026-10-03', ref: 'camt.053 Ntry[3]', rule: 'byAmount' } } ] } ] },
-    { key: 'Health', children: [
-      { key: 'Insurance', records: [
+    { key: 'Insurance', children: [
+      { key: 'HealthInsurance', records: [
         { id: 'R-401', label: 'Health insurer premium', amount: 412.60, date: '2026-10-01', method: 'qr', doc: 'praemie_2026-10.pdf', loc: 'QR code, payment part', conf: null,
-          quote: 'SPC · 0200 · 412.60 CHF · QRR 21 00000 00003 13947 14300 09025', pay: { date: '2026-10-01', ref: 'camt.053 Ntry[1]', rule: 'byRef' } } ] },
+          quote: 'SPC · 0200 · 412.60 CHF · QRR 21 00000 00003 13947 14300 09025', pay: { date: '2026-10-01', ref: 'camt.053 Ntry[1]', rule: 'byRef' } } ] } ] },
+    { key: 'Healthcare', children: [
       { key: 'Pharmacy', records: [
         { id: 'R-402', label: 'Pharmacy receipt', amount: 27.90, date: '2026-10-21', method: 'ocr', doc: 'IMG_2058.jpg', loc: 'page 1, line 9', conf: 0.83,
           quote: 'Total CHF 27.90', pay: null } ] } ] }
@@ -331,7 +342,13 @@
     return out;
   }
 
-  var shades = ['--surface-secondary', '--surface-raised', '--brand-soft', '--hl-slate'];
+  // Expenses in red/orange tones (as in the desktop app); one hue per top-level category.
+  var HUES = ['--tm-1', '--tm-2', '--tm-3', '--tm-4', '--tm-5'];
+  function hueFor(top) {
+    var i = DATA.children.indexOf(top);
+    return HUES[(i < 0 ? 0 : i) % HUES.length];
+  }
+  function status(r) { return r.review ? 'review' : (r.pay ? 'confirmed' : 'unconfirmed'); }
 
   function render(refract) {
     var node = path[path.length - 1];
@@ -344,10 +361,16 @@
       b.type = 'button';
       b.className = 'tile' + (r.it.record ? ' leaf' : '');
       b.style.left = r.x + '%'; b.style.top = r.y + '%'; b.style.width = r.w + '%'; b.style.height = r.h + '%';
-      b.style.background = 'var(' + shades[k % shades.length] + ')';
+      var top = path.length > 1 ? path[1] : r.it.node;
+      b.style.background = 'var(' + hueFor(top) + ')';
+      if (path.length > 1) b.style.filter = 'brightness(' + (1 - (k % 4) * 0.08) + ')';
+      if (r.it.record) b.classList.add('st-' + status(r.it.record));
+      var share = Math.round(r.it.value / sum(node) * 100);
+      if (r.w * r.h < 160) b.classList.add('compact');
+      b.title = r.it.label + ' · ' + chf(r.it.value) + ' · ' + share + ' %';
       if (r.it.record && selected === r.it.record.id) b.style.outline = '2px solid var(--text-primary)';
       var strong = document.createElement('strong'); strong.textContent = r.it.label;
-      var span = document.createElement('span'); span.textContent = chf(r.it.value);
+      var span = document.createElement('span'); span.textContent = chf(r.it.value) + ' · ' + share + ' %';
       b.append(strong, span);
       b.setAttribute('aria-label', r.it.label + ', ' + chf(r.it.value));
       b.addEventListener('click', function () {
@@ -403,7 +426,7 @@
       el.appendChild(pay);
       var why = document.createElement('p'); why.className = 'meta'; why.textContent = t('why') + ': ' + t(r.pay.rule); el.appendChild(why);
     } else {
-      badge.className = 'badge warn'; badge.textContent = t('unmatched'); pay.appendChild(badge); el.appendChild(pay);
+      badge.className = 'badge warn'; badge.textContent = r.review ? t('lgReview') : t('unmatched'); pay.appendChild(badge); el.appendChild(pay);
     }
   }
 
