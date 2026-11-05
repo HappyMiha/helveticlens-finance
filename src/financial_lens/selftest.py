@@ -93,5 +93,10 @@ def run(screenshot: str | None = None) -> int:
         report["error"] = traceback.format_exc()[-2000:]
         ok = False
     report["ok"] = ok
-    print(json.dumps(report, indent=2, default=str))
+    text = json.dumps(report, indent=2, default=str)
+    if screenshot:  # windowed builds on Windows have no console: always leave a report file
+        with open(os.path.splitext(screenshot)[0] + ".json", "w", encoding="utf-8") as fh:
+            fh.write(text)
+    if sys.stdout is not None:
+        print(text)
     return 0 if ok else 1

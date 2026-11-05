@@ -1,0 +1,85 @@
+name: Desktop installers
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+permissions:
+  contents: write
+env:
+  FL_VERSION: ${{ github.ref_type == 'tag' && github.ref_name || '0.5.0-dev' }}
+jobs:
+  linux:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: packaging/linux/build.sh
+      - name: Self-test the AppImage
+        run: APPIMAGE_EXTRACT_AND_RUN=1 QT_QPA_PLATFORM=offscreen ./dist/FinancialLens-x86_64.AppImage --self-test selftest-linux.png
+      - uses: actions/upload-artifact@v4
+        with: {name: linux, path: "dist/FinancialLens-x86_64.AppImage\nselftest-linux.*"}
+
+  windows:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.12"}
+      - name: Tesseract and language data
+        shell: pwsh
+        run: |
+          choco install tesseract --no-progress -y
+          $t = "C:\Program Files\Tesseract-OCR"
+          foreach ($l in "deu","fra","ita","eng","osd") {
+            Invoke-WebRequest "https://github.com/tesseract-ocr/tessdata_fast/raw/4.1.0/$l.traineddata" -OutFile "$t\tessdata\$l.traineddata"
+          }
+          "FL_TESSERACT_DIR=$t" >> $env:GITHUB_ENV
+      - run: pip install "pyinstaller>=6.11" ".[api,db,security,ocr,embedded]" "PySide6-Essentials>=6.8" openpyxl
+      - run: pyinstaller --noconfirm --clean --distpath build/pyi/dist --workpath build/pyi/work packaging/financial-lens.spec
+      - name: Self-test the build
+        shell: pwsh
+        run: |
+          $env:QT_QPA_PLATFORM = "offscreen"
+          $p = Start-Process -FilePath build\pyi\dist\FinancialLens\FinancialLens.exe -ArgumentList "--self-test","$PWD\selftest-windows.png" -Wait -PassThru
+          Get-Content selftest-windows.json
+          if ($p.ExitCode -ne 0) { exit 1 }
+      - name: Installer
+        shell: pwsh
+        run: '& "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" packaging\windows\financial-lens.iss'
+      - uses: actions/upload-artifact@v4
+        with: {name: windows, path: "dist/FinancialLens-Setup-x64.exe\nselftest-windows.*"}
+
+  macos:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.12"}
+      - name: Tesseract and language data
+        run: |
+          brew install tesseract
+          TD="$(brew --prefix)/share/tessdata"
+          for l in deu fra ita; do curl -fsSL -o "$TD/$l.traineddata" "https://github.com/tesseract-ocr/tessdata_fast/raw/4.1.0/$l.traineddata"; done
+          echo "FL_TESSDATA=$TD" >> $GITHUB_ENV
+      - run: pip install "pyinstaller>=6.11" ".[api,db,security,ocr,embedded]" "PySide6-Essentials>=6.8" openpyxl
+      - run: pyinstaller --noconfirm --clean --distpath build/pyi/dist --workpath build/pyi/work packaging/financial-lens.spec
+      - name: Self-test the build
+        run: QT_QPA_PLATFORM=offscreen "build/pyi/dist/Financial Lens.app/Contents/MacOS/FinancialLens" --self-test selftest-macos.png
+      - name: Disk image
+        run: |
+          mkdir -p dist dmg && cp -R "build/pyi/dist/Financial Lens.app" dmg/ && ln -s /Applications dmg/Applications
+          hdiutil create -volname "Financial Lens" -srcfolder dmg -ov -format UDZO dist/FinancialLens-macOS-arm64.dmg
+      - uses: actions/upload-artifact@v4
+        with: {name: macos, path: "dist/FinancialLens-macOS-arm64.dmg\nselftest-macos.*"}
+
+  release:
+    if: github.ref_type == 'tag'
+    needs: [linux, windows, macos]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with: {path: out, merge-multiple: true}
+      - env: {GH_TOKEN: "${{ github.token }}"}
+        run: |
+          gh release create "${{ github.ref_name }}" --repo "${{ github.repository }}" --title "Financial Lens ${{ github.ref_name }}" \
+            --notes "Desktop installers for Linux (AppImage), Windows (installer) and macOS (Apple silicon). Each build passed its self-test (OCR, embedded PostgreSQL, matching, window). The builds are not code-signed yet: Windows SmartScreen and macOS Gatekeeper will ask for confirmation on first start." \
+            out/FinancialLens-x86_64.AppImage out/FinancialLens-Setup-x64.exe out/FinancialLens-macOS-arm64.dmg
