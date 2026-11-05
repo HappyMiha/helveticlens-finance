@@ -25,3 +25,6 @@ Each entry: date · decision · reason.
 - 2026-11-05 · Default privacy level for a new profile is L2 (maximum); moving to L1/L0 is an explicit, audited admin action.
 - 2026-11-05 · Audit log rows are hash-chained so tampering is detectable even by a database superuser.
 - 2026-11-05 · Backups: AES-256-GCM with scrypt-derived key; restore verifies the manifest and every original before inserting anything.
+- 2026-11-05 · Phone uploads via an installable web app (PWA) served by the local API instead of a native mobile app: no app store, works on iOS and Android, data stays on the local network. The LAN gate exposes only `/m` to other devices.
+- 2026-11-05 · E-mail import reads IMAP read-only (`BODY.PEEK`), deduplicates by Message-ID, never deletes; credentials only from the environment. In L2 only local or private-network mail servers.
+- 2026-11-05 · Manual records start *Unconfirmed*; an attached file is linked as evidence but does not confirm the record on its own.

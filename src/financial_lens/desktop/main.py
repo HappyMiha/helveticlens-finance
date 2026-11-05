@@ -19,7 +19,9 @@ from typing import Optional
 
 from PySide6.QtCore import QPointF, QRectF, Qt, QUrl, Signal
 from PySide6.QtGui import QAction, QColor, QDesktopServices, QFont, QPainter, QPen
+from PySide6.QtCore import QDate
 from PySide6.QtWidgets import (
+    QDateEdit, QDialog, QDialogButtonBox, QFormLayout, QLineEdit,
     QAbstractItemView, QApplication, QComboBox, QFileDialog, QFrame, QGridLayout, QHBoxLayout, QHeaderView,
     QLabel, QListWidget, QMainWindow, QMessageBox, QPushButton, QSplitter, QStackedWidget, QTableWidget,
     QTableWidgetItem, QTextBrowser, QVBoxLayout, QWidget,
@@ -264,6 +266,15 @@ class MainWindow(QMainWindow):
         bar.addSeparator()
         bar.addAction(imp)
         bar.addAction(exp)
+        add = QAction("Add record…", self)
+        add.triggered.connect(self.add_record_dialog)
+        pair = QAction("Pair phone…", self)
+        pair.triggered.connect(self.pair_phone_dialog)
+        mail = QAction("Fetch mail", self)
+        mail.triggered.connect(self.fetch_mail)
+        bar.addAction(add)
+        bar.addAction(pair)
+        bar.addAction(mail)
 
         self.stack.addWidget(self._overview())
         self.inbox = table(["Type", "Item", "Status", "Reason"])
@@ -542,6 +553,66 @@ class MainWindow(QMainWindow):
                           for p in proposed] + [["Document", d["filename"], d["processing_status"], d["doc_type"]] for d in review],
              [("link", str(p["id"])) for p in proposed] + [("doc", d["id"]) for d in review])
 
+    # ---------------------------------------------------- manual entry
+    def add_record_dialog(self) -> None:
+        dlg = ManualDialog(self, [c["path"] for c in self.lens.categories() if c["kind"] in ("expense", "income")],
+                           self.today)
+        if dlg.exec():
+            self.add_record(**dlg.values())
+
+    def add_record(self, kind: str, amount: str, currency: str, op_date: date, counterparty: str,
+                   category: Optional[tuple] = None, description: str = "", attachment: Optional[str] = None) -> str:
+        op = self.lens.add_manual(kind, amount, currency, op_date, counterparty, category, description)
+        if attachment:  # keep the supporting file as evidence of this manual record
+            res = self.lens.ingest(Path(attachment).read_bytes(), Path(attachment).name)
+            with self.lens.db.transaction():
+                self.lens.db.execute("INSERT INTO document_operations VALUES (%s,%s,'attachment') ON CONFLICT DO NOTHING",
+                                     (res.document_id, op))
+                self.lens._audit("attach", "operation", op, {"document": res.document_id})
+        self.refresh()
+        return op
+
+    # ---------------------------------------------------- phone and mail
+    def pair_phone_dialog(self) -> None:
+        from ..api.mobile import pair_device
+
+        self._ensure_lan_server()
+        info = pair_device(self.lens, "Phone")
+        PairDialog(self, info["url"]).exec()
+
+    def _ensure_lan_server(self) -> None:
+        if getattr(self, "_server", None):
+            return
+        import threading
+
+        import uvicorn
+
+        os.environ.setdefault("FL_DSN", self.lens.dsn)
+        os.environ.setdefault("FL_DATA", str(self.lens.files.root.parent))
+        os.environ.setdefault("FL_ORG", next(o["name"] for o in self.lens.organizations() if o["id"] == self.lens.org))
+        config = uvicorn.Config("financial_lens.api.app:app", host="0.0.0.0", port=int(os.environ.get("FL_PORT", "8765")),
+                                log_level="warning")
+        self._server = uvicorn.Server(config)
+        threading.Thread(target=self._server.run, daemon=True).start()
+
+    def fetch_mail(self) -> None:
+        from .. import mail
+
+        host, user = os.environ.get("FL_MAIL_HOST"), os.environ.get("FL_MAIL_USER")
+        if not host or not user or not os.environ.get("FL_MAIL_PASSWORD"):
+            QMessageBox.information(self, "Mail", "Set FL_MAIL_HOST, FL_MAIL_USER and FL_MAIL_PASSWORD (and optionally "
+                                    "FL_MAIL_PORT, FL_MAIL_FOLDER), then try again.")
+            return
+        try:
+            res = mail.fetch(self.lens, host, user, os.environ["FL_MAIL_PASSWORD"], os.environ.get("FL_MAIL_FOLDER", "INBOX"),
+                             int(os.environ.get("FL_MAIL_PORT", "993")))
+        except Exception as exc:
+            QMessageBox.warning(self, "Mail", str(exc))
+            return
+        self.refresh()
+        QMessageBox.information(self, "Mail", f"{res.messages} new messages, {len(res.documents)} documents, "
+                                f"{res.skipped} already imported." + ("\n" + "\n".join(res.notes[:10]) if res.notes else ""))
+
     def _switch_org(self, name: str) -> None:
         if name:
             self.lens.open_organization(name)
@@ -601,6 +672,100 @@ class MainWindow(QMainWindow):
 
     def dropEvent(self, event) -> None:  # noqa: N802
         self.import_paths([u.toLocalFile() for u in event.mimeData().urls() if u.isLocalFile()])
+
+
+class ManualDialog(QDialog):
+    """Enter a record by hand (cash, a lost receipt). It stays Unconfirmed until evidence arrives."""
+
+    def __init__(self, parent, categories: list[tuple], today: date) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Add record")
+        self.setStyleSheet(QSS)
+        form = QFormLayout(self)
+        self.kind = QComboBox()
+        self.kind.addItems(["expense", "receipt", "invoice", "income"])
+        self.amount = QLineEdit()
+        self.amount.setPlaceholderText("e.g. 42.50")
+        self.currency = QComboBox()
+        self.currency.addItems(["CHF", "EUR", "USD", "GBP"])
+        self.when = QDateEdit(QDate(today.year, today.month, today.day))
+        self.when.setCalendarPopup(True)
+        self.counterparty = QLineEdit()
+        self.category = QComboBox()
+        self.category.addItem("Choose automatically", None)
+        for path in categories:
+            self.category.addItem(" / ".join(path), path)
+        self.description = QLineEdit()
+        self.attachment: Optional[str] = None
+        attach = QPushButton("Attach receipt or file…")
+        attach.clicked.connect(self._attach)
+        self.attach_label = QLabel("No file")
+        self.attach_label.setObjectName("muted")
+        self.error = QLabel("")
+        self.error.setStyleSheet(f"color: {TOKENS['danger']}")
+        for label, w in (("Kind", self.kind), ("Amount", self.amount), ("Currency", self.currency), ("Date", self.when),
+                         ("Counterparty", self.counterparty), ("Category", self.category), ("Note", self.description),
+                         ("Evidence", attach), ("", self.attach_label), ("", self.error)):
+            form.addRow(label, w)
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(self._accept)
+        buttons.rejected.connect(self.reject)
+        form.addRow(buttons)
+
+    def _attach(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(self, "Attach evidence")
+        if path:
+            self.attachment = path
+            self.attach_label.setText(Path(path).name)
+
+    def _accept(self) -> None:
+        try:
+            value = Decimal(self.amount.text().replace("'", "").replace(",", ".").strip())
+            if value <= 0:
+                raise ValueError
+            value.quantize(Decimal("0.01"))
+            if value != value.quantize(Decimal("0.01")):
+                raise ValueError
+        except Exception:
+            self.error.setText("Enter a positive amount with at most two decimals.")
+            return
+        if not self.counterparty.text().strip():
+            self.error.setText("Enter who you paid or who paid you.")
+            return
+        self.accept()
+
+    def values(self) -> dict:
+        d = self.when.date()
+        return {"kind": self.kind.currentText(), "amount": self.amount.text().replace("'", "").replace(",", ".").strip(),
+                "currency": self.currency.currentText(), "op_date": date(d.year(), d.month(), d.day()),
+                "counterparty": self.counterparty.text().strip(), "category": self.category.currentData(),
+                "description": self.description.text().strip(), "attachment": self.attachment}
+
+
+class PairDialog(QDialog):
+    def __init__(self, parent, url: str) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Pair phone")
+        self.setStyleSheet(QSS)
+        lay = QVBoxLayout(self)
+        import io
+
+        import qrcode
+        from PySide6.QtGui import QPixmap
+
+        buf = io.BytesIO()
+        qrcode.make(url, border=2, box_size=8).save(buf, "PNG")
+        pix = QPixmap()
+        pix.loadFromData(buf.getvalue())
+        img = QLabel()
+        img.setPixmap(pix)
+        img.setAlignment(Qt.AlignCenter)
+        lay.addWidget(QLabel("Scan with the phone camera (same Wi-Fi). The link works once per phone; revoke it any time."))
+        lay.addWidget(img)
+        link = QLabel(url.split("#")[0])
+        link.setObjectName("muted")
+        lay.addWidget(link)
+        self.url = url
 
 
 def _e(text) -> str:

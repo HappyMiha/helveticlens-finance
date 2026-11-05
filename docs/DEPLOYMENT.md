@@ -37,3 +37,15 @@ Run the same stack on a server hosted in Switzerland (e.g. Infomaniak, Swisscom)
 }
 ```
 Providers not allowed by the current privacy level are skipped (and logged), never called.
+
+## Ways to bring documents in
+| Way | How |
+| --- | --- |
+| Drag & drop | Drop files anywhere on the desktop window, or *Import files…* |
+| Manual entry | *Add record…* in the desktop (optionally attach a receipt); stays *Unconfirmed* until evidence arrives |
+| Watched folder | `financial-lens watch ~/FinancialLens/inbox` — new files are imported and moved to `imported/` |
+| Phone | Desktop *Pair phone…* (or `financial-lens pair`) shows a QR code; the phone opens an installable upload page with the camera. The phone can reach only `/m`; tokens are stored hashed and can be revoked. Works on the local Wi-Fi without internet. |
+| E-mail | Forward invoices to a dedicated mailbox, then *Fetch mail* or `financial-lens mail --host … --user …` (password in `FL_MAIL_PASSWORD`). Attachments and plain-text bodies become documents; each message once; nothing is changed on the server. In L2 only a local server (e.g. Proton Mail Bridge on 127.0.0.1). |
+| Command line / API | `financial-lens import FILE…`, `POST /documents` |
+
+Formats: JPG, PNG, TIFF, WEBP, HEIC/HEIF, PDF (text or scanned), TXT, Swiss QR-bill, camt.053/054, CSV, XLSX.

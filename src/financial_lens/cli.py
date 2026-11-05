@@ -77,6 +77,14 @@ def main(argv=None) -> int:
     r = sub.add_parser("restore")
     r.add_argument("file")
     sub.add_parser("check")
+    ml = sub.add_parser("mail", help="import documents from a mailbox (password in FL_MAIL_PASSWORD)")
+    ml.add_argument("--host", default=os.environ.get("FL_MAIL_HOST", "127.0.0.1"))
+    ml.add_argument("--port", type=int, default=int(os.environ.get("FL_MAIL_PORT", "993")))
+    ml.add_argument("--user", default=os.environ.get("FL_MAIL_USER", ""))
+    ml.add_argument("--folder", default=os.environ.get("FL_MAIL_FOLDER", "INBOX"))
+    ml.add_argument("--from", dest="senders", action="append", help="only accept these senders (repeatable)")
+    pr = sub.add_parser("pair", help="pair a phone for uploads; prints the link and a QR code")
+    pr.add_argument("--name", default="Phone")
     pv = sub.add_parser("privacy")
     pv.add_argument("level", choices=["L0", "L1", "L2"])
     args = p.parse_args(argv)
@@ -85,7 +93,8 @@ def main(argv=None) -> int:
         import uvicorn
 
         if args.host not in ("127.0.0.1", "::1", "localhost"):
-            print("Warning: the API is reachable from other machines. Put it behind TLS and authentication.", file=sys.stderr)
+            print("Listening on the network: other devices can reach only the paired-phone upload page (/m); "
+                  "everything else answers this machine only.", file=sys.stderr)
         uvicorn.run("financial_lens.api.app:app", host=args.host, port=args.port)
         return 0
     if args.cmd == "desktop":
@@ -133,6 +142,28 @@ def main(argv=None) -> int:
         for c in rep["checks"]:
             print(("OK   " if c["ok"] else "WARN ") + f"{c['check']}: {c['detail']}")
         return 0 if rep["ok"] else 1
+    elif args.cmd == "mail":
+        from .mail import fetch
+
+        res = fetch(lens, args.host, args.user, os.environ.get("FL_MAIL_PASSWORD") or getpass.getpass("Mail password: "),
+                    args.folder, args.port, args.senders)
+        print(f"{res.messages} new messages, {len(res.documents)} documents, {res.skipped} already imported")
+        for n in res.notes:
+            print("  -", n)
+    elif args.cmd == "pair":
+        from .api.mobile import pair_device
+
+        info = pair_device(lens, args.name)
+        print("Open on the phone (same Wi-Fi), with `financial-lens serve --host 0.0.0.0` running:")
+        print(info["url"])
+        try:
+            import qrcode
+
+            q = qrcode.QRCode(border=1)
+            q.add_data(info["url"])
+            q.print_ascii(invert=True)
+        except ImportError:
+            pass
     elif args.cmd == "privacy":
         lens.set_privacy_level(args.level)
         print("Privacy level", args.level)

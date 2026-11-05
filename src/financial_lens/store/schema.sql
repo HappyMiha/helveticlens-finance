@@ -345,4 +345,29 @@ CREATE TABLE IF NOT EXISTS settings (
 );
 ALTER TABLE audit_log ADD COLUMN IF NOT EXISTS chain char(64);
 
-INSERT INTO schema_version (version) VALUES (1), (2), (3), (4) ON CONFLICT DO NOTHING;
+
+-- v5: more ways in — e-mail import and paired phones.
+CREATE TABLE IF NOT EXISTS mail_messages (
+  organization_id uuid NOT NULL REFERENCES organizations(id),
+  mailbox text NOT NULL,
+  message_id text NOT NULL,
+  sender text NOT NULL DEFAULT '',
+  subject text NOT NULL DEFAULT '',
+  received_at timestamptz,
+  documents int NOT NULL DEFAULT 0,
+  fetched_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (organization_id, mailbox, message_id)
+);
+
+CREATE TABLE IF NOT EXISTS device_tokens (
+  id uuid PRIMARY KEY,
+  organization_id uuid NOT NULL REFERENCES organizations(id),
+  name text NOT NULL,
+  token_sha256 char(64) NOT NULL UNIQUE,
+  created_by text NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  last_used_at timestamptz,
+  revoked_at timestamptz
+);
+
+INSERT INTO schema_version (version) VALUES (1), (2), (3), (4), (5) ON CONFLICT DO NOTHING;

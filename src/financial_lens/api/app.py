@@ -326,3 +326,53 @@ def security_check(fl: FinancialLens = Depends(lens)) -> dict:
     from .. import security
 
     return security.self_check(fl)
+
+
+# ------------------------------------------------------- more ways in (v5)
+from . import mobile as _mobile  # noqa: E402
+
+app.middleware("http")(_mobile.lan_gate)
+app.include_router(_mobile.make_routes(lens))
+
+
+class Pairing(BaseModel):
+    name: str = "Phone"
+    base_url: Optional[str] = None
+
+
+@app.post("/devices")
+def pair(body: Pairing, fl: FinancialLens = Depends(lens)) -> dict:
+    return _mobile.pair_device(fl, body.name, body.base_url)
+
+
+@app.get("/devices")
+def list_devices(fl: FinancialLens = Depends(lens)) -> list[dict]:
+    return _mobile.devices(fl)
+
+
+@app.delete("/devices/{device_id}")
+def revoke(device_id: str, fl: FinancialLens = Depends(lens)) -> dict:
+    _mobile.revoke_device(fl, device_id)
+    return {"status": "revoked"}
+
+
+class MailFetch(BaseModel):
+    host: str
+    user: str
+    folder: str = "INBOX"
+    port: int = 993
+    allowed_senders: Optional[list[str]] = None
+
+
+@app.post("/mail/fetch")
+def mail_fetch(body: MailFetch, fl: FinancialLens = Depends(lens)) -> dict:
+    from .. import mail
+
+    password = os.environ.get("FL_MAIL_PASSWORD")
+    if not password:
+        raise HTTPException(422, "Set FL_MAIL_PASSWORD in the environment; passwords are never sent through the API.")
+    try:
+        res = mail.fetch(fl, body.host, body.user, password, body.folder, body.port, body.allowed_senders)
+    except mail.MailError as exc:
+        raise HTTPException(422, str(exc))
+    return res.__dict__
