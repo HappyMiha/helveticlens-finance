@@ -221,6 +221,10 @@ class MainWindow(QMainWindow):
         self.current_doc: Optional[str] = None
         self.setWindowTitle("Financial Lens")
         self.resize(1440, 900)
+        # Bundled font as a fallback where the platform offers none (e.g. headless Windows).
+        from PySide6.QtGui import QFontDatabase
+
+        QFontDatabase.addApplicationFont(str(Path(__file__).parent.parent / "assets" / "DejaVuSans.ttf"))
         self.setAcceptDrops(True)
         self.setStyleSheet(QSS)
 
