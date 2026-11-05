@@ -578,26 +578,35 @@ class MainWindow(QMainWindow):
 
     # ---------------------------------------------------- phone and mail
     def pair_phone_dialog(self) -> None:
-        from ..api.mobile import pair_device
+        """Pair the Financial Lens phone app: one-time QR with the pinned certificate fingerprint."""
+        from ..api.mobile import lan_address
+        from ..api.mobile_v1 import create_offer
 
-        self._ensure_lan_server()
-        info = pair_device(self.lens, "Phone")
-        PairDialog(self, info["url"]).exec()
+        port = self._ensure_lan_server()
+        info = create_offer(self.lens, f"{lan_address()}:{port}", self._tls_fp, ("upload", "read", "review"))
+        PairDialog(self, info["uri"]).exec()
 
-    def _ensure_lan_server(self) -> None:
+    def _ensure_lan_server(self) -> int:
+        """HTTPS on the local network with this installation's own certificate (pinned by phones).
+        Other devices reach only the phone endpoints; everything else answers this machine only."""
+        port = int(os.environ.get("FL_MOBILE_PORT", "8766"))
         if getattr(self, "_server", None):
-            return
+            return port
         import threading
 
         import uvicorn
 
+        from ..tls import ensure_certificate
+
+        cert, key, self._tls_fp = ensure_certificate(self.lens.files.root.parent / "tls")
         os.environ.setdefault("FL_DSN", self.lens.dsn)
         os.environ.setdefault("FL_DATA", str(self.lens.files.root.parent))
         os.environ.setdefault("FL_ORG", next(o["name"] for o in self.lens.organizations() if o["id"] == self.lens.org))
-        config = uvicorn.Config("financial_lens.api.app:app", host="0.0.0.0", port=int(os.environ.get("FL_PORT", "8765")),
-                                log_level="warning")
+        config = uvicorn.Config("financial_lens.api.app:app", host="0.0.0.0", port=port, log_level="warning",
+                                ssl_certfile=str(cert), ssl_keyfile=str(key))
         self._server = uvicorn.Server(config)
         threading.Thread(target=self._server.run, daemon=True).start()
+        return port
 
     def fetch_mail(self) -> None:
         from .. import mail
@@ -764,9 +773,10 @@ class PairDialog(QDialog):
         img = QLabel()
         img.setPixmap(pix)
         img.setAlignment(Qt.AlignCenter)
-        lay.addWidget(QLabel("Scan with the phone camera (same Wi-Fi). The link works once per phone; revoke it any time."))
+        lay.addWidget(QLabel("Open the Financial Lens app on your phone and scan this code (same Wi-Fi).\n"
+                             "It works once and expires in 5 minutes. You can revoke the phone at any time."))
         lay.addWidget(img)
-        link = QLabel(url.split("#")[0])
+        link = QLabel(url.split("&otp=")[0].split("#")[0])
         link.setObjectName("muted")
         lay.addWidget(link)
         self.url = url

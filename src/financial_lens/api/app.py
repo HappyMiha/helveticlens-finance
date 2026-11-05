@@ -376,3 +376,9 @@ def mail_fetch(body: MailFetch, fl: FinancialLens = Depends(lens)) -> dict:
     except mail.MailError as exc:
         raise HTTPException(422, str(exc))
     return res.__dict__
+
+
+# ------------------------------------------------------------- mobile app v1
+from . import mobile_v1 as _mv1  # noqa: E402
+
+app.include_router(_mv1.make_router(lens))

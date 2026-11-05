@@ -20,7 +20,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, Response
 from ..service import FinancialLens
 
 router = APIRouter()
-PUBLIC_PATHS = ("/m", "/health")
+PUBLIC_PATHS = ("/m", "/health", "/mobile/v1/")
 
 
 def lan_address() -> str:

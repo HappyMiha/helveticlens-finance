@@ -370,4 +370,38 @@ CREATE TABLE IF NOT EXISTS device_tokens (
   revoked_at timestamptz
 );
 
-INSERT INTO schema_version (version) VALUES (1), (2), (3), (4), (5) ON CONFLICT DO NOTHING;
+
+-- v6: mobile app — one-time pairing offers, device keys, request nonces.
+CREATE TABLE IF NOT EXISTS pair_offers (
+  id uuid PRIMARY KEY,
+  organization_id uuid NOT NULL REFERENCES organizations(id),
+  otp_sha256 char(64) NOT NULL,
+  scopes text[] NOT NULL,
+  created_by text NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  expires_at timestamptz NOT NULL,
+  used_at timestamptz
+);
+
+CREATE TABLE IF NOT EXISTS mobile_devices (
+  id uuid PRIMARY KEY,
+  organization_id uuid NOT NULL REFERENCES organizations(id),
+  name text NOT NULL,
+  platform text NOT NULL,
+  public_key text NOT NULL,            -- P-256 SubjectPublicKeyInfo, base64
+  key_sha256 char(64) NOT NULL UNIQUE,
+  scopes text[] NOT NULL,
+  member_id uuid REFERENCES members(id),
+  paired_at timestamptz NOT NULL DEFAULT now(),
+  last_seen_at timestamptz,
+  revoked_at timestamptz
+);
+
+CREATE TABLE IF NOT EXISTS mobile_nonces (
+  device_id uuid NOT NULL REFERENCES mobile_devices(id),
+  nonce text NOT NULL,
+  seen_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (device_id, nonce)
+);
+
+INSERT INTO schema_version (version) VALUES (1), (2), (3), (4), (5), (6) ON CONFLICT DO NOTHING;
