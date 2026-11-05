@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from typing import Optional
 
 DEFAULT_TREE: dict[str, tuple[str, list[str]]] = {
-    "Housing": ("expense", ["Rent", "Electricity", "Water", "Heating", "Repairs", "Telecom", "Other"]),
+    "Housing": ("expense", ["Rent", "Electricity", "Water", "Heating", "Repairs", "Telecom", "Furniture", "Other"]),
     "Food": ("expense", ["Groceries", "Restaurants"]),
     "Transport": ("expense", ["Public transport", "Car", "Fuel", "Car repairs", "Parking"]),
     "Insurance": ("expense", ["Health insurance", "Household insurance", "Car insurance"]),
@@ -18,6 +18,11 @@ DEFAULT_TREE: dict[str, tuple[str, list[str]]] = {
     "Utilities": ("expense", ["Electricity", "Water", "Waste"]),
     "Leisure": ("expense", ["Sport", "Culture", "Travel"]),
     "Taxes": ("expense", ["Federal", "Cantonal", "Municipal"]),
+    "Shopping": ("expense", ["Online", "Clothes", "Electronics", "Other"]),
+    "Subscriptions": ("expense", ["Streaming", "Apps"]),
+    "Cash": ("expense", ["Withdrawals"]),
+    "Bills": ("expense", ["Collective payment orders"]),
+    "Transfers": ("expense", ["To people"]),
     "Salary": ("income", []),
     "Other income": ("income", []),
     "Refunds": ("income", []),

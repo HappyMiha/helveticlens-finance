@@ -28,7 +28,7 @@ from .domain.money import MINOR_UNITS
 from .extract import fields as fx
 from .extract import understand
 from .extract import ocr
-from .ingest import camt053, tabular
+from .ingest import booking_text, camt053, tabular
 from .store.files import OriginalStore
 
 BASE = "CHF"
@@ -721,8 +721,9 @@ class FinancialLens:
             self._ai_log("extract", "analyst:statement", "local",
                          f"{len(an.rows)} booking lines; checks: " +
                          ", ".join(f"{c.name} {'✓' if c.ok else '✗'}" for c in an.checks), an.to_json(), document_id=doc)
-        payments, skipped_rows = [], []
+        payments, skipped_rows, hints = [], [], {}
         seen: dict[str, int] = {}
+        owners = self._holders(text.text, an)
         for r in an.rows:
             if r["amount"] is None or r["date"] is None:
                 skipped_rows.append(r["quote"])
@@ -731,7 +732,9 @@ class FinancialLens:
             words = re.sub(r"\b\d{1,2}[./]\d{1,2}[./](\d{2,4})?\b", " ", words)
             party = re.sub(r"^(zahlung an|gutschrift von|gutschrift|lastschrift|e-banking|einkauf|paiement à|"
                            r"versement de|virement de|achat|twint|ordine|pagamento a)\s*", "", " ".join(words.split()), flags=re.I)
-            key = f"pdf:{r['date']}:{r['amount']}:{party[:30]}"
+            key = f"pdf:{r['date']}:{r['amount']}:{party[:30]}"  # unchanged, so re-imports are still recognised
+            booking = booking_text.parse(words, owners)
+            party = booking_text.label(booking)
             seen[key] = seen.get(key, 0) + 1
             payments.append(Payment(
                 amount=Money(r["amount"].quantize(Decimal("0.01")), BASE), booked_on=r["date"],
@@ -739,8 +742,9 @@ class FinancialLens:
                 bank_reference=f"{key}#{seen[key]}",
                 provenance=Provenance(doc, f"line {r['line']}", Method.STRUCTURED_IMPORT, "analyst:statement",
                                       quote=r["quote"])))
+            hints[f"{key}#{seen[key]}"] = booking
         iban = (an.facts.get("iban") or {}).get("value")
-        result = self._import_payments(doc, payments, iban, f"{text.engine}+statement-analyst")
+        result = self._import_payments(doc, payments, iban, f"{text.engine}+statement-analyst", hints)
         if not an.consistent:
             note = "The statement does not fully reconcile — please check. " + self._explain(an)
             with self.db.transaction():
@@ -778,7 +782,11 @@ class FinancialLens:
     def _import_camt(self, doc: str, data: bytes) -> IngestResult:
         return self._import_payments(doc, camt053.parse(data, doc), camt053.account_iban(data), "camt-parser")
 
-    def _import_payments(self, doc: str, payments: list, iban: Optional[str], engine: str) -> IngestResult:
+    def _import_payments(self, doc: str, payments: list, iban: Optional[str], engine: str,
+                         hints: Optional[dict] = None) -> IngestResult:
+        hints = hints or {}
+        ai = self.ai if self.ai_assist() else None
+        expense_paths = None
         op_ids, skipped = [], 0
         with self.db.transaction():
             account = self._account(iban, payments[0].amount.currency if payments else BASE)
@@ -790,22 +798,22 @@ class FinancialLens:
                         (self.org, p.bank_reference)).fetchone():
                     skipped += 1
                     continue
-                own = self._is_own_transfer(p.counterparty, p.remittance or "")
-                cat = ("Own transfers",) if own else None
-                if cat is None and p.amount.amount < 0:
-                    sug = classify(p.counterparty, p.remittance or "", self._rules())
-                    cat = sug.path
-                elif cat is None:
-                    sug = classify(p.counterparty, p.remittance or "", self._rules())
-                    cat = sug.path if sug.path[0] in ("Salary", "Other income", "Refunds") else ("Other income",)
+                booking = hints.get(p.bank_reference)
+                own = self._is_own_transfer(p.counterparty, p.remittance or "") or bool(booking and booking.own_account)
+                if own:
+                    cat, review = ("Own transfers",), None
+                else:
+                    if ai is not None and expense_paths is None:
+                        expense_paths = [c["path"] for c in self.categories() if c["kind"] == "expense"]
+                    cat, review = self._bank_category(p, booking, ai, expense_paths, doc)
                 op = self._new_operation("transfer" if own else "payment", {
                     "amount": p.amount.amount, "currency": p.amount.currency, "op_date": p.booked_on,
                     "counterparty": p.counterparty, "description": p.remittance or "",
                     "category_id": self.category_id(cat, "transfer" if own else
                                                     ("expense" if p.amount.amount < 0 else "income")),
                     "account_id": account, "reference": p.reference, "bank_reference": p.bank_reference,
-                    "verification": "unconfirmed",
-                    "verification_reason": "Booked by the bank; no document linked yet",
+                    "verification": "needs_review" if review else "unconfirmed",
+                    "verification_reason": review or "Booked by the bank; no document linked yet",
                     "source_document_id": doc, "method": "structured_import", "agent": p.provenance.agent,
                     "provenance": {"entry": {"location": p.provenance.location, "document_id": doc}},
                 }, change_reason="imported from bank statement")
@@ -818,6 +826,106 @@ class FinancialLens:
         if skipped:
             msgs.append(f"Skipped {skipped} entries already imported from another statement.")
         return IngestResult(doc, "bank_statement", None, op_ids, [], msgs)
+
+    def _bank_category(self, p, booking, ai, expense_paths, doc: str) -> tuple[tuple[str, ...], Optional[str]]:
+        """Category for a bank entry: your own rules first, then the merchant read from the booking text,
+        then the built-in hints, then (if switched on) the local AI. Returns (path, reason to review or None)."""
+        out = p.amount.amount < 0
+        review = None
+        if booking is not None and booking.possibly_own:
+            review = ("Possibly a transfer to your own account at " + booking.merchant.split(" (")[0] +
+                      ". If it is, set the category to Own transfers and it no longer counts as spending.")
+        sug = classify(p.counterparty, p.remittance or "", self._rules())
+        if sug.method in ("user-rule", "learned-rule"):
+            return sug.path, review
+        if booking is not None and booking.category and (out or booking.category[0] in ("Other income", "Refunds")):
+            return booking.category, review
+        if sug.path != ("Unclassified",):
+            return (sug.path if out or sug.path[0] in ("Salary", "Other income", "Refunds") else ("Other income",)), review
+        if not out:
+            return ("Other income",), review
+        if ai is not None and expense_paths and not review:
+            try:
+                guess = ai.classify(p.counterparty, p.remittance or "", expense_paths, document_id=doc)
+            except Exception:  # the model is optional; a failure must not stop the import
+                guess = None
+            if guess is not None:
+                self._ai_log("classify", "model", "local", f"Suggested {' / '.join(guess.path)} for {p.counterparty}",
+                             {"confidence": guess.confidence, "reason": guess.reason}, document_id=doc)
+                return guess.path, review
+        return ("Unclassified",), review
+
+    def _holders(self, text: str, an) -> list[str]:
+        """Account holder names: printed above the first booking, plus the people of this organisation."""
+        header = text
+        if an.rows:
+            first = an.rows[0].get("quote") or ""
+            at = text.find(first) if first else -1
+            header = text[:at] if at > 0 else "\n".join(text.splitlines()[:30])
+        names = booking_text.owners_from_header(header)
+        for r in self.db.execute("SELECT u.name FROM users u JOIN memberships m ON m.user_id=u.id "
+                                 "WHERE m.organization_id=%s", (self.org,)).fetchall():
+            n = (r["name"] or "").strip()
+            if len(n.split()) >= 2 and n not in names:
+                names.append(n)
+        return names
+
+    BANK_TEXT_VERSION = "1"
+
+    def tidy_bank_entries(self, force: bool = False) -> int:
+        """Re-read the booking text of bank entries imported from statement PDFs or photos before the booking-text
+        reader existed: clean names, categories, own transfers. Entries a person has corrected are left alone."""
+        done = self.db.execute("SELECT value FROM settings WHERE organization_id=%s AND key='bank_text_version'",
+                               (self.org,)).fetchone()
+        if done and not force and str(done["value"]).strip('"') == self.BANK_TEXT_VERSION:
+            return 0
+        rows = self.db.execute(
+            "SELECT c.*, o.kind AS op_kind FROM operations_current c JOIN operations o ON o.id=c.operation_id "
+            "WHERE c.organization_id=%s AND o.kind='payment' AND c.bank_reference LIKE 'pdf:%%' "
+            "AND NOT EXISTS (SELECT 1 FROM operation_revisions r WHERE r.operation_id=c.operation_id "
+            "AND r.method='manual')", (self.org,)).fetchall()
+        holders: dict[str, list[str]] = {}
+        changed = 0
+        from types import SimpleNamespace
+
+        with self.db.transaction():
+            for r in rows:
+                doc = str(r["source_document_id"]) if r["source_document_id"] else ""
+                if doc not in holders:
+                    ex = self.db.execute("SELECT text, fields FROM extractions WHERE document_id=%s AND text IS NOT NULL "
+                                         "ORDER BY created_at DESC LIMIT 1", (doc,)).fetchone() if doc else None
+                    rows_json = ((ex["fields"] or {}).get("analysis") or {}).get("rows") or [] if ex else []
+                    an = SimpleNamespace(rows=rows_json)
+                    holders[doc] = self._holders(ex["text"], an) if ex else []
+                words = r["description"] or r["counterparty"] or ""
+                booking = booking_text.parse(words, holders[doc])
+                label = booking_text.label(booking)
+                own = booking.own_account or self._is_own_transfer(label, words)
+                p = SimpleNamespace(amount=SimpleNamespace(amount=r["amount"]), counterparty=label, remittance=words)
+                if own:
+                    path, review = ("Own transfers",), None
+                else:
+                    path, review = self._bank_category(p, booking, None, None, doc)
+                current = self.category_path(r["category_id"])
+                old_cat = current if r["category_id"] else ("Unclassified",)
+                if own:
+                    self.db.execute("UPDATE operations SET kind='transfer' WHERE id=%s", (r["operation_id"],))
+                if label == r["counterparty"] and path == old_cat and not own and not review:
+                    continue
+                values = {"counterparty": label,
+                          "category_id": self.category_id(path, "transfer" if own else
+                                                          ("expense" if r["amount"] < 0 else "income")),
+                          "agent": "analyst:booking-text"}
+                if review and r["verification"] != "confirmed":
+                    values.update({"verification": "needs_review", "verification_reason": review[:900]})
+                self._revision(str(r["operation_id"]), values, "booking text read again")
+                changed += 1
+            self.db.execute("INSERT INTO settings VALUES (%s,'bank_text_version',%s) ON CONFLICT (organization_id, key) "
+                            "DO UPDATE SET value=EXCLUDED.value", (self.org, Jsonb(self.BANK_TEXT_VERSION)))
+            if changed:
+                self._audit("tidy", "bank_entries", self.org, {"changed": changed, "version": self.BANK_TEXT_VERSION},
+                            actor="analyst:booking-text")
+        return changed
 
     def _is_own_transfer(self, counterparty: str, remittance: str) -> bool:
         text = (counterparty + " " + remittance).casefold()

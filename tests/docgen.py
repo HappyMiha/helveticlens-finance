@@ -207,3 +207,47 @@ def receipt_with_change() -> bytes:
                 c.drawRightString(260, y, a)
             y -= 13
     return _pdf(draw), {"total": Decimal("14.50")}
+
+
+def statement_bkb_en() -> bytes:
+    """English statement with BKB-style booking texts, card and booking numbers and OCR-like debris."""
+    opening = Decimal("9000.00")
+    rows = [
+        ("01.10.2026", ["purchase of goods and services abroad", "Withdrawal location: BKGBOOKINGCOM HOTE",
+                        "Transaction date: / 11:36:30 Card no.: 4871 52** **** 7"], Decimal("-312.40")),
+        ("02.10.2026", ["atm Cash withdrawal ATM", "Withdrawal location: BKB VOGESENPLATZ 63",
+                        "Transaction date: / 20:31:21 Card no.: 4871 52** **** 7"], Decimal("-200.00")),
+        ("03.10.2026", ["debit collective order of 2 4 4 0 1", "BKB Booking No. 1236984944"], Decimal("-4591.15")),
+        ("04.10.2026", ["Revolut Bank UAB Konstitucijos ave. 21B", "LT-Vilnius Lithuania Mykhailo Shavrytskyi, CH",
+                        "BKB Booking No. 1229000001"], Decimal("-1000.00")),
+        ("05.10.2026", ["purchase of goods and services", "Withdrawal location: Migros M Mulhauserst",
+                        "Transaction date: / 16:27:06 Card no.: 4871 52** **** 7"], Decimal("-45.10")),
+        ("06.10.2026", ["payment SBB EASYRIDE, BERN", "T M _ T D _ T M BKB Booking No. 1237488234"], Decimal("-18.60")),
+    ]
+
+    def draw(c):
+        c.setFont("Helvetica-Bold", 13)
+        c.drawString(50, 800, "Basler Kantonalbank")
+        c.setFont("Helvetica", 10)
+        c.drawString(50, 784, "Mykhailo Shavrytskyi")
+        c.drawString(50, 770, "Statement of account 01.10.2026 - 31.10.2026")
+        c.drawString(50, 756, "Private account CH93 0076 2011 6238 5295 7 CHF")
+        y = 720
+        c.setFont("Helvetica-Bold", 9)
+        for x, h in [(50, "Date"), (115, "Text"), (360, "Debit"), (430, "Credit"), (500, "Balance")]:
+            c.drawString(x, y, h)
+        c.setFont("Helvetica", 9)
+        y -= 16
+        c.drawString(115, y, "Opening balance"); c.drawRightString(545, y, _money(opening)); y -= 16
+        bal = opening
+        for d, text, amt in rows:
+            bal += amt
+            c.drawString(50, y, d); c.drawString(115, y, text[0])
+            c.drawRightString(410, y, _money(-amt))
+            c.drawRightString(545, y, _money(bal)); y -= 13
+            for extra in text[1:]:
+                c.drawString(115, y, extra); y -= 13
+            y -= 3
+        c.setFont("Helvetica-Bold", 9)
+        c.drawString(115, y, "Closing balance"); c.drawRightString(545, y, _money(bal))
+    return _pdf(draw)

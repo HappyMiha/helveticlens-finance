@@ -28,6 +28,12 @@ def _lens() -> FinancialLens:
                          actor=os.environ.get("FL_ACTOR", "user:local"))
     lens.migrate()
     lens.open_organization(os.environ.get("FL_ORG", "Personal"), os.environ.get("FL_ORG_KIND", "personal"))
+    try:
+        lens.tidy_bank_entries()  # once per version of the booking-text reader
+    except Exception:  # never keep the ledger from opening
+        import logging
+
+        logging.getLogger("financial_lens").exception("tidying bank entries failed")
     if lens.privacy_level() == "local_only":  # L2: no outbound connections from this process
         from .. import privacy
 
