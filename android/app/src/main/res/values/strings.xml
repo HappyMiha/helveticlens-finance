@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">Financial Lens</string>
+    <string name="widget_description">This month\'s spending and records to check</string>
+</resources>

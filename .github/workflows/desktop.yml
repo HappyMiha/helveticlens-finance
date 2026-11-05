@@ -85,23 +85,16 @@ jobs:
       - uses: actions/upload-artifact@v4
         with: {name: macos, path: "dist/FinancialLens-macOS-arm64.dmg\nselftest-macos.*"}
 
-  mobile-check:
-    # Builds and unit-tests the phone app on every run. Release APKs are signed on the maintainer's
-    # machine with a key that is not stored in GitHub; iOS needs an Apple Developer account to sign.
-    runs-on: macos-14
+  android-check:
+    # Builds the native Android app on every run. Release APKs are signed on the maintainer's machine
+    # with a key that is not stored in GitHub.
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-      - uses: subosito/flutter-action@v2
-        with: {flutter-version: "3.35.7", channel: stable}
       - uses: actions/setup-java@v4
         with: {distribution: temurin, java-version: "17"}
-      - working-directory: mobile
-        run: |
-          flutter pub get
-          flutter analyze
-          flutter test
-          flutter build apk --debug
-          flutter build ios --simulator --no-codesign
+      - working-directory: android
+        run: ./gradlew --no-daemon assembleDebug assembleDebugAndroidTest
 
   release:
     if: github.ref_type == 'tag'

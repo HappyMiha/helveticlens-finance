@@ -28,3 +28,6 @@ Each entry: date · decision · reason.
 - 2026-11-05 · Phone uploads via an installable web app (PWA) served by the local API instead of a native mobile app: no app store, works on iOS and Android, data stays on the local network. The LAN gate exposes only `/m` to other devices.
 - 2026-11-05 · E-mail import reads IMAP read-only (`BODY.PEEK`), deduplicates by Message-ID, never deletes; credentials only from the environment. In L2 only local or private-network mail servers.
 - 2026-11-05 · Manual records start *Unconfirmed*; an attached file is linked as evidence but does not confirm the record on its own.
+- 2026-11-05 · Mobile (Miha): Android only for now; local network only; the end-to-end encrypted relay will be a paid service later. iOS code stays in the repository but is not built or published.
+- 2026-11-05 · The Android release key lives only on the maintainer's PC (`~/.config/financial-lens/android`), not in GitHub; release APKs are signed there and attached to the GitHub release.
+- 2026-11-05 · Android app is native Kotlin + Jetpack Compose (not Flutter): device key generated inside the Android Keystore/StrongBox and never exportable, ML Kit document scanner and code scanner, Glance widget, share target, WorkManager queue; 3 MB APK. The earlier Flutter prototype stays in `mobile/` only as a reference for the protocol and is not published.

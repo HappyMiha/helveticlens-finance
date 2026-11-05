@@ -1,6 +1,14 @@
 # Financial Lens Mobile — architecture and security
 
-Status: design, 2026-11-05. Decisions open for Miha are marked **[decision]**.
+Status: phase 1 built (2026-11-05). Decisions by Miha (2026-11-05): **Android only for now; phone and Financial Lens on the same network only (e.g. home Wi-Fi); the end-to-end encrypted relay comes later as a paid service.**
+
+## Phase 1 — what is implemented and verified
+- Server `/mobile/v1` (pairing offers, device keys, signed requests, nonces, scopes, revocation, pinned TLS) — `tests/test_mobile_v1.py`.
+- Native Android app in `android/` (Kotlin, Jetpack Compose) — the published app; the Flutter prototype in `mobile/` is kept only as a protocol reference. Features: QR pairing, photo, document scanner, photo library, files, offline queue, overview, category drill-down, evidence and originals, Face ID / fingerprint lock, screenshots blocked (Android), hidden in the app switcher, excluded from cloud backup.
+- End-to-end on an Android emulator against a real server (`packaging/mobile_e2e.sh`): a server with a different certificate is refused before anything is sent; pairing, signed upload and read-back work.
+- Dart signatures verified by the Python server code (cross-check in `mobile/test`).
+- Android: the device key is generated inside the Android Keystore (StrongBox where available) and cannot be exported; home-screen widget, share target and multi-page PDF scans are included.
+- Not yet: the relay (planned as a paid service), iOS.
 
 ## Principle
 The phone is a **window and a camera**, not a second ledger. The ledger, the
@@ -48,7 +56,7 @@ documents to it. Nothing about the privacy levels (L0/L1/L2) changes.
 - No analytics SDKs, no third-party crash reporters, no ads. Only network destinations: the paired home and (if chosen) the relay.
 
 ## Technology
-- **Flutter** (one code base for Android and iOS, good camera/scanner plugins, AOT-compiled), with small native parts where the platform requires them: iOS share extension and WidgetKit widget (Swift), Android Glance widget (Kotlin), Secure Enclave / Keystore access.
+- **Android: native Kotlin + Jetpack Compose** (decided 2026-11-05) — Keystore/StrongBox keys, ML Kit, Glance, WorkManager. iOS later as its own Swift app on the same protocol.
 - Server side: a new `/mobile/v1` API in Financial Lens (pairing, signed requests, scopes, upload, read endpoints returning ledger-computed values), plus the relay service.
 - Builds in GitHub Actions: Android on Linux, iOS on macOS runners; each build runs automated UI tests on an emulator/simulator.
 

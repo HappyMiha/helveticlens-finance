@@ -151,3 +151,36 @@ def test_tls_certificate_is_stable_and_pinnable(tmp_path):
     cert, key, fp = ensure_certificate(tmp_path)
     assert len(fp) == 64 and oct(key.stat().st_mode)[-3:] == "600"
     assert ensure_certificate(tmp_path)[2] == fp == fingerprint(cert)  # same certificate on every start
+
+
+def test_desktop_serves_pinned_https_for_phones(lens, monkeypatch, tmp_path):
+    """The desktop 'Pair phone' path: HTTPS with its own certificate; the fingerprint in the QR matches it."""
+    pytest.importorskip("PySide6")
+    import socket
+    import ssl
+    import time
+    import hashlib
+
+    from PySide6.QtWidgets import QApplication
+    from financial_lens.desktop.main import MainWindow
+    from financial_lens.api import mobile_v1
+
+    app = QApplication.instance() or QApplication([])
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+    monkeypatch.setenv("FL_MOBILE_PORT", str(port))
+    monkeypatch.setenv("FL_DSN", lens.dsn)
+    w = MainWindow(lens)
+    assert w._ensure_lan_server() == port
+    for _ in range(50):
+        try:
+            der = ssl.get_server_certificate(("127.0.0.1", port))
+            break
+        except OSError:
+            time.sleep(0.2)
+    served = hashlib.sha256(ssl.PEM_cert_to_DER_cert(der)).hexdigest()
+    offer = mobile_v1.create_offer(lens, f"127.0.0.1:{port}", w._tls_fp)
+    assert f"fp={served}" in offer["uri"]
+    w._server.should_exit = True
+    app.processEvents()
