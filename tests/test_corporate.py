@@ -147,7 +147,22 @@ def test_member_sees_only_own_statement(server, tmp_path):
     assert m.get("/ui/transactions").status_code == 403
 
 
+def test_after_trial_a_reminder_but_work_goes_on(server, tmp_path, monkeypatch):
+    c = client()
+    h = owner(c, server, tmp_path)
+    assert c.get("/ui/me").json()["license"]["nag"] is False
+    later = date.today() + timedelta(days=L.TRIAL_DAYS + 1)
+    real_status = L.status
+    monkeypatch.setattr(L, "status", lambda lens, today=None: real_status(lens, today or later))
+    lic = c.get("/ui/me").json()["license"]
+    assert lic["state"] == "trial_ended" and lic["nag"] is True and lic["writable"] is True
+    assert "buy a subscription" in lic["message"] and lic["contact"] == "info@helveticlens.ch"
+    body = {"amount": "9.90", "op_date": "2026-10-12", "counterparty": "Coop", "kind": "expense"}
+    assert c.post("/operations", json=body, headers=h).status_code == 200
+
+
 def test_trial_then_signed_key(server, tmp_path, issuer, monkeypatch):
+    monkeypatch.setattr(L, "ENFORCE", True)  # strict mode: read-only without a licence
     c = client()
     h = owner(c, server, tmp_path)
     st = L.status(server)
@@ -160,7 +175,7 @@ def test_trial_then_signed_key(server, tmp_path, issuer, monkeypatch):
     monkeypatch.setattr(L, "status", lambda lens, today=None: real_status(lens, today or later))
     assert L.status(server).state == "trial_ended"
     r = c.post("/operations", json=body, headers=h)
-    assert r.status_code == 402 and "trial ended" in r.json()["detail"]
+    assert r.status_code == 402 and "trial ended" in r.json()["detail"] and "readable" in r.json()["detail"]
     assert c.get("/dashboard").status_code == 200
     lic = c.get("/ui/license").json()
     assert lic["request"].startswith("FLR1.")

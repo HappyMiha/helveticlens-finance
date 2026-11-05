@@ -85,6 +85,11 @@ input[type=password], input[type=email], textarea { background: var(--surface-se
 textarea { width: 100%; min-height: 80px; font-family: var(--font-geist-mono, monospace); font-size: 12px; }
 .form input, .form select, .login input { width: 100%; min-width: 0; }
 .form { display: grid; gap: 10px; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); align-items: end; }
+.nag { max-width: 460px; border: 1px solid var(--line-strong); border-radius: 14px; background: var(--surface-raised, var(--surface));
+  color: var(--text-primary); padding: 22px; box-shadow: var(--shadow-floating); }
+.nag::backdrop { background: rgba(9, 11, 14, 0.75); }
+.nag h2 { margin: 0 0 8px; font-size: 19px; }
+.nag-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 14px; }
 .scroll { overflow-x: auto; }
 .mono { font-family: var(--font-geist-mono, monospace); font-size: 12px; word-break: break-all; }
 .side-foot button { background: none; border: 0; color: inherit; font: inherit; text-decoration: underline; cursor: pointer; padding: 0; }

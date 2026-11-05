@@ -82,9 +82,10 @@ afterwards. *Download CSV* gives the whole log for the auditor.
 * **Prices:** CHF 1 per user per month, or CHF 10 per user for two years.
 * The key is checked on the server without any internet connection: it is signed by Helvetic Lens and valid for
   this installation only.
-* Without a valid key (trial over, licence ended, or more active users than licensed) **nothing is lost**:
-  everyone can still sign in, read, ask and export everything. Only new records and changes wait for the key.
-  Administrators can still manage people (e.g. disable users to get within the licence) and install a key.
+* Without a valid key (trial over, licence ended, or more active users than licensed) everyone keeps working, but a
+  window asking to buy a subscription and enter the key appears at every sign-in and every 15 minutes, and a
+  banner stays on top. With `FL_LICENSE_ENFORCE=1` the ledger instead becomes read-only (reading, asking and
+  exporting still work; administrators can still manage people and install a key).
 
 ## Issuing keys (Helvetic Lens)
 

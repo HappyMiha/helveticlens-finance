@@ -30,6 +30,9 @@ from pathlib import Path
 from typing import Optional
 
 TRIAL_DAYS = 90
+# For now an ended trial or licence only reminds people (a window that keeps coming back); with
+# FL_LICENSE_ENFORCE=1 the ledger becomes read-only instead.
+ENFORCE = os.environ.get("FL_LICENSE_ENFORCE", "") == "1"
 PRICE_PER_USER_MONTH = Decimal("1")
 PRICE_PER_USER_2Y = Decimal("10")
 PLANS = ("monthly", "2y")
@@ -192,6 +195,15 @@ class Status:
     message: str = ""
     prices: dict = field(default_factory=dict)
     contact: str = LICENSE_CONTACT
+    nag: bool = False           # show the "buy a subscription / enter a key" window
+
+
+def _unlicensed(state: str, why: str, **kw) -> Status:
+    if ENFORCE:
+        msg = why + " Data stays readable and exportable; install a licence key to keep recording."
+    else:
+        msg = why + " Please buy a subscription and enter your licence key."
+    return Status(state, not ENFORCE, message=msg, nag=True, **kw)
 
 
 def _setting(lens, key: str):
@@ -237,22 +249,18 @@ def status(lens, today: Optional[date] = None) -> Status:
         try:
             p = verify(key, iid)
         except LicenseError as exc:
-            return Status("invalid", False, days_left=0, message=str(exc), **base)
+            return _unlicensed("invalid", str(exc), days_left=0, **base)
         exp = date.fromisoformat(p["expires"])
         lic = dict(seats=p["seats"], plan=p["plan"], customer=p.get("customer"), expires=p["expires"])
         if exp < today:
-            return Status("expired", False, days_left=0, message=f"The licence ended on {exp:%d.%m.%Y}. "
-                          "Data stays readable and exportable; request a new key to keep recording.", **lic, **base)
+            return _unlicensed("expired", f"The licence ended on {exp:%d.%m.%Y}.", days_left=0, **lic, **base)
         if users > p["seats"]:
-            return Status("over_seats", False, days_left=(exp - today).days, message=(
-                f"{users} active users, the licence covers {p['seats']}. Disable users or request a key for more."),
-                **lic, **base)
+            return _unlicensed("over_seats", f"{users} active users, the licence covers {p['seats']}.",
+                               days_left=(exp - today).days, **lic, **base)
         return Status("active", True, days_left=(exp - today).days, **lic, **base)
     if today <= ends:
         return Status("trial", True, days_left=(ends - today).days, message=f"Trial until {ends:%d.%m.%Y}.", **base)
-    return Status("trial_ended", False, days_left=0, message=(
-        f"The 3-month trial ended on {ends:%d.%m.%Y}. Data stays readable and exportable; "
-        "request a licence key to keep recording."), **base)
+    return _unlicensed("trial_ended", f"The 3-month trial ended on {ends:%d.%m.%Y}.", days_left=0, **base)
 
 
 def install_key(lens, key: str) -> dict:

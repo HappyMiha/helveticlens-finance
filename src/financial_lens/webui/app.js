@@ -396,10 +396,39 @@
     var text = '';
     if (lic.state === 'trial' && lic.days_left <= 30) text = 'Trial: ' + lic.days_left + ' days left. ';
     else if (lic.state === 'active' && lic.days_left <= 30) text = 'The licence ends in ' + lic.days_left + ' days. ';
-    else if (!lic.writable) text = (lic.message || 'A licence key is needed.') + ' ';
-    b.hidden = !text; b.className = 'banner' + (lic.writable ? '' : ' warn');
+    else if (lic.nag) text = (lic.message || 'A licence key is needed.') + ' ';
+    b.hidden = !text; b.className = 'banner' + (lic.nag ? ' warn' : '');
     clear(b).appendChild(document.createTextNode(text));
     if (text && admin) b.appendChild(el('a', { href: '#/license', text: 'Get a licence key' }));
+  }
+
+
+  // After the trial (or when a licence ended) a reminder keeps coming back until a key is installed.
+  var NAG_EVERY = 15 * 60 * 1000, nagTimer = null;
+  function showNag(lic) {
+    var old = document.getElementById('nag'); if (old) old.remove();
+    var admin = ME && (ME.role === 'owner' || ME.role === 'admin');
+    var close = function () { d.close(); d.remove(); };
+    var mail = 'mailto:' + lic.contact + '?subject=' + encodeURIComponent('Financial Lens subscription') +
+      '&body=' + encodeURIComponent('We would like a subscription for ' + Math.max(lic.users || 1, 1) + ' users.\nPlan (monthly or 2 years): \n');
+    var d = el('dialog', { id: 'nag', class: 'nag', 'aria-labelledby': 'nag-title' }, [
+      el('h2', { id: 'nag-title', text: lic.state === 'trial_ended' ? 'Your free trial has ended' : 'Your licence needs attention' }),
+      el('p', { text: lic.message || '' }),
+      el('p', { class: 'muted', text: 'CHF 1 per user per month, or CHF 10 per user for 2 years' +
+        (lic.prices ? ' (for your ' + Math.max(lic.users || 1, 1) + ' users: CHF ' + lic.prices.monthly + ' per month or CHF ' + lic.prices['2y'] + ' for 2 years).' : '.') }),
+      el('div', { class: 'nag-actions' }, [
+        el('a', { class: 'btn primary', href: mail, text: 'Buy a subscription' }),
+        admin ? el('a', { class: 'btn', href: '#/license', text: 'Enter licence key', onclick: close }) : null,
+        el('button', { class: 'btn', type: 'button', text: 'Remind me later', onclick: close })]),
+      admin ? null : el('p', { class: 'muted', text: 'Your administrator can enter the key under Licence.' })]);
+    document.body.appendChild(d);
+    if (d.showModal) d.showModal(); else d.setAttribute('open', '');
+  }
+  function startNag(lic) {
+    clearInterval(nagTimer);
+    if (!lic || !lic.nag) return;
+    showNag(lic);
+    nagTimer = setInterval(function () { showNag(lic); }, NAG_EVERY);
   }
 
   function renderTeam() {
@@ -577,6 +606,7 @@
         foot.appendChild(document.createTextNode(ME.name + ' · '));
         foot.appendChild(el('button', { type: 'button', text: 'Sign out', onclick: signOut }));
         licenceBanner(me.license);
+        startNag(me.license);
       }
       route(); if (!ME || ME.role !== 'member') refreshInboxCount();
     }).catch(function (e) {

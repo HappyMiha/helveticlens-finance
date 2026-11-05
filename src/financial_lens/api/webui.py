@@ -129,7 +129,8 @@ def make_router(get_lens) -> APIRouter:
             lic = licensing.status(fl)
             out.update(csrf=user.get("csrf", ""), user={k: user.get(k) for k in ("id", "login", "name", "role", "via")},
                        organizations=[o for o in out["organizations"] if o["id"] == fl.org],
-                       license={"state": lic.state, "writable": lic.writable, "days_left": lic.days_left,
+                       license={"state": lic.state, "writable": lic.writable, "days_left": lic.days_left, "nag": lic.nag,
+                                "contact": lic.contact, "prices": lic.prices, "users": lic.users,
                                 "message": lic.message, "trial_ends": lic.trial_ends, "expires": lic.expires})
         return out
 
