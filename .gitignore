@@ -11,3 +11,6 @@ deploy/cloudflared/cert.pem
 data/
 build/
 dist/
+mobile/build/
+mobile/.dart_tool/
+mobile/android/key.properties
