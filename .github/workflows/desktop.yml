@@ -103,7 +103,9 @@ jobs:
         run: ./gradlew --no-daemon assembleDebug assembleDebugAndroidTest
 
   release:
-    if: github.ref_type == 'tag' || inputs.release != ''
+    # macOS runners are sometimes not assigned (job cancelled at once); then the previous release's
+    # disk image is carried over so Windows and Linux fixes are not held back.
+    if: always() && (github.ref_type == 'tag' || inputs.release != '') && needs.linux.result == 'success' && needs.windows.result == 'success'
     needs: [linux, windows, macos]
     runs-on: ubuntu-24.04
     steps:
@@ -113,6 +115,7 @@ jobs:
         env: {GH_TOKEN: "${{ github.token }}"}
         run: |
           gh release download --repo "${{ github.repository }}" --pattern FinancialLens-Android.apk --dir out/dist || true
+          [ -f out/dist/FinancialLens-macOS-arm64.dmg ] || gh release download --repo "${{ github.repository }}" --pattern FinancialLens-macOS-arm64.dmg --dir out/dist || true
           ls -l out/dist
       - env: {GH_TOKEN: "${{ github.token }}"}
         run: |
