@@ -495,6 +495,56 @@ class FinancialLens:
         result.links = self.reconcile()
         return result
 
+    def reread(self, document_id: str) -> IngestResult:
+        """Read a document again (e.g. now with the local model switched on). Records made from the earlier
+        reading are kept in the history but replaced: linked as confirmed duplicates of the new ones, so they
+        no longer count. Refused once a record from this document was confirmed or matched to a payment."""
+        self.authorize("write")
+        d = self.db.execute("SELECT * FROM documents WHERE id=%s AND organization_id=%s", (document_id, self.org)).fetchone()
+        if d is None:
+            raise LookupError("Document not found.")
+        if d["doc_type"] == "bank_statement" or d["media_type"] in ("application/xml", "text/xml", "text/csv") \
+                or d["filename"].lower().endswith((".csv", ".xlsx", ".xml")):
+            raise ValueError("Bank statements and exports are imported line by line and are not read again.")
+        old = [str(r["operation_id"]) for r in self.db.execute(
+            "SELECT o.operation_id FROM document_operations o JOIN operations_current c ON c.operation_id=o.operation_id "
+            "WHERE o.document_id=%s AND o.role='source' AND NOT EXISTS (SELECT 1 FROM links d WHERE "
+            "d.from_operation_id=o.operation_id AND d.link_type='duplicate' AND d.status='confirmed')", (document_id,)).fetchall()]
+        if old:
+            fixed = self.db.execute(
+                "SELECT 1 FROM operations_current c WHERE c.operation_id = ANY(%s::uuid[]) AND (c.verification='confirmed' OR "
+                "EXISTS (SELECT 1 FROM links l WHERE l.status='confirmed' AND l.link_type <> 'duplicate' AND "
+                "(l.from_operation_id=c.operation_id OR l.to_operation_id=c.operation_id)))", (old,)).fetchone()
+            if fixed:
+                raise ValueError("A record from this document is already confirmed or matched to a payment; "
+                                 "correct that record instead of reading the document again.")
+        with self.db.transaction():
+            self._audit("reread", "document", document_id, {"ai": self.ai_assist(), "replacing": old})
+        result = self._process_document(document_id, self.files.get(d["sha256"]), d["media_type"])
+        if old and result.operation_ids:
+            new = result.operation_ids[0]
+            with self.db.transaction():
+                for op in old:
+                    self.db.execute(
+                        "UPDATE links SET status='rejected', decided_by=%s, decided_at=now() WHERE status='proposed' AND "
+                        "((from_operation_id=%s AND to_operation_id=ANY(%s::uuid[])) OR (to_operation_id=%s AND "
+                        "from_operation_id=ANY(%s::uuid[])))", (self.actor, op, result.operation_ids, op, result.operation_ids))
+                    row = self.db.execute("SELECT amount, currency FROM operations_current WHERE operation_id=%s", (op,)).fetchone()
+                    self.db.execute(
+                        "INSERT INTO links (id, organization_id, from_operation_id, to_operation_id, link_type, amount, currency, "
+                        "rule, reasons, status, created_by, decided_by, decided_at) VALUES (%s,%s,%s,%s,'duplicate',%s,%s,"
+                        "'reread',%s,'confirmed',%s,%s,now()) ON CONFLICT (from_operation_id, to_operation_id, link_type) DO NOTHING",
+                        (_uuid(), self.org, op, new, abs(row["amount"]), row["currency"],
+                         Jsonb(["the same document was read again"]), self.actor, self.actor))
+                    self._revision(op, {"agent": self.actor, "verification": "unconfirmed",
+                                        "verification_reason": "Replaced by a new reading of the same document"},
+                                   "replaced by a new reading")
+            result.messages.append(f"Read again; {len(old)} earlier record(s) replaced.")
+        elif old:
+            result.messages.append("Read again, but still not enough to make a record; the earlier record stays.")
+        result.links = self.reconcile()
+        return result
+
     def _folder(self, doc_type: str, op_date: Optional[date], path: tuple[str, ...], unpaid: bool) -> str:
         year = str(op_date.year) if op_date else "UNDATED"
         if doc_type == "bank_statement":
@@ -1190,12 +1240,14 @@ class FinancialLens:
         income = sum((self._in_base(r) or Decimal(0)) for r in self._income_rows(start, end))
         unconfirmed = self.db.execute(
             "SELECT operation_id, kind, amount, currency, op_date, counterparty, verification, verification_reason "
-            "FROM operations_current WHERE organization_id=%s AND verification <> 'confirmed' "
+            "FROM operations_current c WHERE organization_id=%s AND verification <> 'confirmed' AND "
+            "NOT EXISTS (SELECT 1 FROM links dup WHERE dup.from_operation_id=c.operation_id AND dup.link_type='duplicate' AND dup.status='confirmed') "
             "ORDER BY op_date DESC LIMIT 50", (self.org,)).fetchall()
         unpaid = self.db.execute(
             "SELECT operation_id, amount, currency, op_date, due_date, counterparty FROM operations_current c "
             "WHERE organization_id=%s AND kind='invoice' AND NOT EXISTS (SELECT 1 FROM links l WHERE "
-            "l.from_operation_id=c.operation_id AND l.status='confirmed' AND l.link_type='payment') "
+            "l.from_operation_id=c.operation_id AND l.status='confirmed' AND l.link_type='payment') AND "
+            "NOT EXISTS (SELECT 1 FROM links dup WHERE dup.from_operation_id=c.operation_id AND dup.link_type='duplicate' AND dup.status='confirmed') "
             "ORDER BY coalesce(due_date, op_date)", (self.org,)).fetchall()
         recent = self.db.execute(
             "SELECT id, filename, doc_type, processing_status, folder, received_at FROM documents "

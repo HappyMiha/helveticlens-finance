@@ -97,3 +97,10 @@ def test_autostart_files(tmp_path, monkeypatch):
     assert launcher.autostart_enabled() and "--service" in launcher._autostart_path().read_text()
     launcher.set_autostart(False)
     assert not launcher.autostart_enabled()
+
+
+def test_ai_status_says_plainly_what_is_going_on(lens, monkeypatch):
+    c, _ = _client(lens, monkeypatch)
+    c.post("/ui/session", json={"key": "k" * 43})
+    s = c.get("/ui/ai").json()
+    assert s["state"] in ("not_installed", "off", "starting", "on", "error")

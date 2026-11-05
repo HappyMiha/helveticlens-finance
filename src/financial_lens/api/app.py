@@ -128,6 +128,16 @@ async def upload(files: list[UploadFile], privacy: str = "local_only", fl: Finan
     return out
 
 
+@app.post("/documents/{document_id}/reread")
+def reread(document_id: str, fl: FinancialLens = Depends(lens)) -> dict:
+    try:
+        return fl.reread(document_id).__dict__
+    except LookupError as exc:
+        raise HTTPException(404, str(exc))
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
+
+
 @app.get("/documents")
 def documents(fl: FinancialLens = Depends(lens)) -> list[dict]:
     return fl.documents()
@@ -484,7 +494,8 @@ def ui_inbox(fl: FinancialLens = Depends(lens)) -> dict:
         "JOIN operations_current t ON t.operation_id=l.to_operation_id WHERE l.organization_id=%s AND l.status='proposed' "
         "ORDER BY f.op_date DESC", (fl.org,)).fetchall()
     review = fl.db.execute(
-        "SELECT operation_id, kind, op_date, counterparty, amount, currency, verification_reason FROM operations_current "
-        "WHERE organization_id=%s AND verification='needs_review' ORDER BY op_date DESC LIMIT 200", (fl.org,)).fetchall()
+        "SELECT operation_id, kind, op_date, counterparty, amount, currency, verification_reason FROM operations_current c "
+        "WHERE organization_id=%s AND verification='needs_review' AND NOT EXISTS (SELECT 1 FROM links dup WHERE dup.from_operation_id=c.operation_id AND dup.link_type='duplicate' AND dup.status='confirmed') "
+        "ORDER BY op_date DESC LIMIT 200", (fl.org,)).fetchall()
     docs = [d for d in fl.documents() if d["processing_status"] in ("needs_review", "failed")]
     return {"links": [fl._json(r) for r in proposed], "review": [fl._json(r) for r in review], "documents": docs}

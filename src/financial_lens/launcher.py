@@ -129,7 +129,8 @@ class Service:
         self.key = webui.load_key(data)
         webui.Settings.key = self.key
         webui.Settings.require_auth = True
-        api.lens()  # migrate and open the ledger before the first request
+        api._lens()  # migrate and open the ledger before the first request
+        webui.autostart_ai()
         config = uvicorn.Config(api.app, host="127.0.0.1", port=PORT, log_level="warning", log_config=None)
         self.server = uvicorn.Server(config)
         threading.Thread(target=self.server.run, daemon=True, name="web").start()

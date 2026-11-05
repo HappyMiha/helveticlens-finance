@@ -222,12 +222,13 @@
   function renderDocuments() {
     var v = clear(view());
     api('GET', '/documents').then(function (docs) {
-      v.appendChild(card('Documents · ' + docs.length, [docs.length ? table([['Received'], ['File'], ['Type'], ['Status'], ['Folder'], ['Records', 'r']],
+      v.appendChild(card('Documents · ' + docs.length, [docs.length ? table([['Received'], ['File'], ['Type'], ['Status'], ['Folder'], ['Records', 'r'], ['', 'r']],
         docs.map(function (d) {
           return el('tr', {}, [el('td', { text: String(d.received_at).slice(0, 16).replace('T', ' ') }),
             el('td', {}, [el('a', { href: '/documents/' + d.id + '/original', target: '_blank', rel: 'noopener', text: d.filename })]),
             el('td', { text: d.doc_type }), el('td', { text: d.processing_status }), el('td', { class: 'muted', text: d.folder || '' }),
-            el('td', { class: 'r', text: String(d.operations) })]);
+            el('td', { class: 'r', text: String(d.operations) }),
+            el('td', { class: 'r' }, [d.doc_type === 'bank_statement' ? null : rereadButton(d.id, renderDocuments)])]);
         })) : el('p', { class: 'empty', text: 'No documents yet. Drop files anywhere on this page.' })]));
     }).catch(function (e) { toast(e.message); });
   }
@@ -344,6 +345,16 @@
     view().insertBefore(box, view().firstChild);
   }
 
+  var aiTimer = null;
+  function updateAIPill(s) {
+    var p = document.getElementById('ai-pill'); if (!p) return;
+    var label = { not_installed: 'AI: not installed', off: 'AI: off', starting: 'AI: starting…', on: 'AI: on', error: 'AI: not running' }[s.state] || 'AI';
+    p.textContent = label; p.className = 'ai-pill ' + s.state; p.hidden = false;
+    clearTimeout(aiTimer);
+    aiTimer = setTimeout(refreshAI, s.state === 'starting' || (s.progress && s.progress.running) ? 3000 : 30000);
+  }
+  function refreshAI() { api('GET', '/ui/ai').then(updateAIPill).catch(function () {}); }
+
   function renderSettings() {
     var v = clear(view()), ai = el('div'), sec = el('div');
     v.appendChild(card('Local AI (Apertus)', [ai]));
@@ -358,8 +369,11 @@
     var drawAI = function () {
       api('GET', '/ui/ai').then(function (s) {
         clear(ai);
-        ai.appendChild(el('p', { class: 'muted', text: s.model + ' · ' + s.licence + ' · about ' + (s.size_bytes / 1e9).toFixed(1) + ' GB. Asked only when the rules are unsure; its reading counts only if the arithmetic reconciles. Runs on this computer only.' }));
-        var installed = s.model_installed && s.runtime_installed;
+        updateAIPill(s);
+        var head = { not_installed: '○ Not installed', off: '○ Installed, switched off', starting: '◌ Starting… (up to a minute)',
+          on: '● On: Apertus is reading your documents', error: '⚠ Not running' }[s.state] || s.state;
+        ai.appendChild(el('p', { class: 'ai-state ' + s.state, text: head }));
+        if (s.state === 'error' && s.error) ai.appendChild(el('p', { class: 'muted', text: s.error }));
         if (s.progress && s.progress.running) {
           var bar = el('div', { class: 'bar-progress' }, [el('div', { style: 'width:' + Math.round((s.progress.frac || 0) * 100) + '%' })]);
           ai.appendChild(el('p', { text: (s.progress.label || '') + ' ' + Math.round((s.progress.frac || 0) * 100) + ' %' }));
@@ -369,14 +383,19 @@
           return;
         }
         if (s.progress && s.progress.error) ai.appendChild(el('p', { text: s.progress.error }));
-        if (!installed) {
-          ai.appendChild(el('button', { class: 'btn primary', text: 'Download and enable', onclick: function () { api('POST', '/ui/ai/install').then(function () { setTimeout(drawAI, 300); }); } }));
+        if (s.state === 'not_installed') {
+          ai.appendChild(el('button', { class: 'btn primary', text: 'Download and switch on', onclick: function () { api('POST', '/ui/ai/install').then(function () { setTimeout(drawAI, 300); }); } }));
+        } else if (s.state === 'starting') {
+          setTimeout(drawAI, 2000);
         } else {
-          ai.appendChild(el('button', { class: 'btn ' + (s.enabled ? '' : 'primary'), text: s.enabled ? 'Turn AI assist off' : 'Turn AI assist on', onclick: function () {
-            toast(s.enabled ? 'Stopping…' : 'Starting the model…');
-            api('POST', '/ui/ai/toggle', { on: !s.enabled }).then(function (r) { toast(r.enabled ? 'AI assist is on.' : 'AI assist is off.'); drawAI(); }).catch(function (e) { toast(e.message); });
+          var on = s.state === 'on';
+          ai.appendChild(el('button', { class: 'btn ' + (on ? '' : 'primary'), text: on ? 'Switch off' : (s.state === 'error' ? 'Try again' : 'Switch on'), onclick: function () {
+            api('POST', '/ui/ai/toggle', { on: !on }).then(drawAI).catch(function (e) { toast(e.message); });
           } }));
         }
+        ai.appendChild(el('p', { class: 'muted', text: s.model + ' · ' + s.licence + ' · about ' + (s.size_bytes / 1e9).toFixed(1) + ' GB, runs on this computer only. ' +
+          'When it is on, new documents are read with it where the rules are unsure; its reading counts only if the arithmetic reconciles. ' +
+          'Documents added before can be read again from Documents → Read again.' }));
       });
     };
     drawAI();
@@ -566,14 +585,34 @@
   }
 
   // ------------------------------------------------------------ upload
+  function rereadButton(id, after) {
+    return el('button', { class: 'btn small', text: 'Read again', onclick: function (e) {
+      var b = e.target; b.disabled = true; b.textContent = 'Reading…';
+      api('POST', '/documents/' + id + '/reread').then(function (r) {
+        toast((r.doc_type || '') + ': ' + r.operation_ids.length + ' record(s). ' + (r.messages || []).join(' '), 10000);
+        if (after) after(); refreshInboxCount();
+      }).catch(function (x) { b.disabled = false; b.textContent = 'Read again'; toast(x.message, 10000); });
+    } });
+  }
   function upload(files) {
     if (!files.length) return;
-    var fd = new FormData();
-    Array.prototype.forEach.call(files, function (f) { fd.append('files', f, f.name); });
-    toast('Reading ' + files.length + ' file(s)…', 60000);
+    var fd = new FormData(), names = [];
+    Array.prototype.forEach.call(files, function (f) { fd.append('files', f, f.name); names.push(f.name); });
+    toast('Reading ' + files.length + ' file(s)…', 120000);
     api('POST', '/documents', fd).then(function (res) {
-      toast(res.map(function (r) { return (r.doc_type || '?') + ': ' + r.operation_ids.length + ' record(s). ' + (r.messages || []).join(' '); }).join('\n'), 12000);
+      document.getElementById('toast').hidden = true;
       route(); refreshInboxCount();
+      var old = document.getElementById('upload-result'); if (old) old.remove();
+      var rows = res.map(function (r, i) {
+        var what = r.duplicate_of ? 'Already here (added earlier)' : r.operation_ids.length ? r.operation_ids.length + ' record(s): ' + r.doc_type : 'Waits for review: ' + r.doc_type;
+        return el('tr', {}, [el('td', { text: names[i] || '' }), el('td', { text: what }), el('td', { class: 'muted', text: (r.messages || []).join(' ') }),
+          el('td', { class: 'r' }, [r.duplicate_of || !r.operation_ids.length ? rereadButton(r.document_id, function () { route(); }) : null])]);
+      });
+      var box = card('Just added', [table([['File'], ['Result'], ['Note'], ['', 'r']], rows),
+        el('p', { class: 'muted', text: 'A file that is already here is not added twice. “Read again” reads it once more, with the local AI if it is on.' }),
+        el('button', { class: 'btn small', text: 'Close', onclick: function () { box.remove(); } })]);
+      box.id = 'upload-result';
+      setTimeout(function () { view().insertBefore(box, view().firstChild); }, 300);
     }).catch(function (e) { toast(e.message); });
   }
 
@@ -633,7 +672,7 @@
         licenceBanner(me.license);
         startNag(me.license);
       }
-      route(); if (!ME || ME.role !== 'member') refreshInboxCount();
+      route(); if (!ME || ME.role !== 'member') { refreshInboxCount(); refreshAI(); }
     }).catch(function (e) {
       fetch('/ui/edition', { credentials: 'same-origin' }).then(function (r) { return r.json(); }).then(function (ed) {
         if (ed.edition === 'corporate') renderLogin(ed.needs_setup);

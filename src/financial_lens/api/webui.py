@@ -195,16 +195,19 @@ def make_router(get_lens) -> APIRouter:
     def ai_status(fl: FinancialLens = Depends(get_lens)) -> dict:
         from ..ai import local_model
 
-        return {**local_model.status(), "enabled": fl.ai_assist(), "progress": _ai_job}
+        return {**local_model.status(), "enabled": fl.ai_assist(), "state": ai_state(), "error": _ai_run.get("error"),
+                "progress": _ai_job}
 
     @r.post("/ui/ai/install")
-    def ai_install() -> dict:
+    def ai_install(fl: FinancialLens = Depends(get_lens)) -> dict:
         from ..ai import local_model
 
+        fl.authorize("configure")
         if _ai_job.get("running"):
             return _ai_job
 
         def work():
+            _ai_job.clear()
             _ai_job.update(running=True, error=None, label="Starting", frac=0.0)
             try:
                 local_model.install(lambda l, f: _ai_job.update(label=l, frac=round(f, 4)), _ai_cancel)
@@ -213,6 +216,8 @@ def make_router(get_lens) -> APIRouter:
                 _ai_job.update(error=str(exc))
             finally:
                 _ai_job.update(running=False)
+            if _ai_job.get("done"):
+                set_ai(True)  # downloaded means wanted: switch it on, no second step
 
         _ai_cancel.clear()
         threading.Thread(target=work, daemon=True).start()
@@ -228,27 +233,86 @@ def make_router(get_lens) -> APIRouter:
 
     @r.post("/ui/ai/toggle")
     def ai_toggle(body: Toggle, fl: FinancialLens = Depends(get_lens)) -> dict:
-        from ..ai import local_model
-
         fl.authorize("configure")
-        if body.on:
-            url = os.environ.get("FL_MODEL_URL") or local_model.start()
-            if Settings.edition == "corporate":
-                from . import app as api
-
-                api.pool.each(lambda other: other.use_local_model(url, "apertus-8b"))
-            fl.use_local_model(url, "apertus-8b")
-        else:
-            local_model.stop()
-        if fl.ai is not None:
-            fl.set_ai_assist(body.on)
-        return {"enabled": fl.ai_assist()}
+        set_ai(body.on)
+        return {"state": ai_state()}
 
     return r
 
 
 _ai_job: dict = {}
 _ai_cancel = threading.Event()
+_ai_run: dict = {"phase": "off"}  # off · starting · on · error
+_ai_lock = threading.Lock()
+
+
+def ai_state() -> str:
+    """What the person should see: not_installed · off · starting · on · error."""
+    from ..ai import local_model
+
+    st = local_model.status()
+    if not (st["model_installed"] and st["runtime_installed"]):
+        return "not_installed"
+    phase = _ai_run.get("phase", "off")
+    if phase == "on" and not local_model.running():
+        _ai_run.update(phase="error", error="The local model stopped; see its log.")
+        return "error"
+    return phase
+
+
+def _remember(on: bool) -> None:
+    from psycopg.types.json import Jsonb
+
+    from . import app as api
+
+    fl = api._lens()
+    with fl.db.transaction():
+        fl.db.execute("INSERT INTO settings VALUES (%s,'ai_assist',%s) ON CONFLICT (organization_id, key) "
+                      "DO UPDATE SET value=EXCLUDED.value, updated_at=now()", (fl.org, Jsonb(bool(on))))
+        fl._audit("ai_assist", "organization", fl.org, {"on": bool(on)})
+
+
+def ai_wanted() -> bool:
+    from . import app as api
+
+    fl = api._lens()
+    row = fl.db.execute("SELECT value FROM settings WHERE organization_id=%s AND key='ai_assist'", (fl.org,)).fetchone()
+    return bool(row["value"]) if row else True
+
+
+def set_ai(on: bool, remember: bool = True) -> None:
+    """Start the model in the background and attach it to every ledger connection, or stop it."""
+    from ..ai import local_model
+    from . import app as api
+
+    if remember:
+        _remember(on)
+    if not on:
+        with _ai_lock:
+            local_model.stop()
+            api.pool.each(lambda fl: setattr(fl, "ai", None))
+            _ai_run.update(phase="off", error=None)
+        return
+    if _ai_run.get("phase") == "starting":
+        return
+    _ai_run.update(phase="starting", error=None)
+
+    def work():
+        with _ai_lock:
+            try:
+                url = os.environ.get("FL_MODEL_URL") or local_model.start()
+                api.pool.each(lambda fl: fl.use_local_model(url, "apertus-8b"))
+                _ai_run.update(phase="on")
+            except Exception as exc:
+                _ai_run.update(phase="error", error=str(exc))
+
+    threading.Thread(target=work, daemon=True, name="local-ai").start()
+
+
+def autostart_ai() -> None:
+    """At service start: if the model is installed and was not switched off, bring it up again."""
+    if ai_state() == "off" and ai_wanted() and not os.environ.get("FL_NO_AI"):
+        set_ai(True, remember=False)
 _phone_server: dict = {}
 
 

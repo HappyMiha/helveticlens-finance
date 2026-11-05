@@ -90,6 +90,12 @@ textarea { width: 100%; min-height: 80px; font-family: var(--font-geist-mono, mo
 .nag::backdrop { background: rgba(9, 11, 14, 0.75); }
 .nag h2 { margin: 0 0 8px; font-size: 19px; }
 .nag-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 14px; }
+.ai-pill { text-decoration: none; font-size: 12px; border: 1px solid var(--line-strong); border-radius: 999px; padding: 4px 10px; color: var(--text-secondary); }
+.ai-pill.on { color: var(--success); border-color: var(--success); }
+.ai-pill.starting { color: var(--warning); border-color: var(--warning); }
+.ai-pill.error { color: var(--warning); border-color: var(--warning); }
+.ai-state { font-size: 16px; font-weight: 600; margin: 0 0 10px; }
+.ai-state.on { color: var(--success); } .ai-state.error, .ai-state.starting { color: var(--warning); }
 .scroll { overflow-x: auto; }
 .mono { font-family: var(--font-geist-mono, monospace); font-size: 12px; word-break: break-all; }
 .side-foot button { background: none; border: 0; color: inherit; font: inherit; text-decoration: underline; cursor: pointer; padding: 0; }

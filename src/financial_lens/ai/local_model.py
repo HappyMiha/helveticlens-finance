@@ -214,6 +214,10 @@ def start(spec: ModelSpec = APERTUS_8B, timeout: float = 180) -> str:
     raise DownloadError(f"The local model did not start; see {log}.")
 
 
+def running() -> bool:
+    return (_proc is not None and _proc.poll() is None and bool(_url)) or bool(os.environ.get("FL_MODEL_URL"))
+
+
 def stop() -> None:
     global _proc, _url
     if _proc is not None and _proc.poll() is None:
