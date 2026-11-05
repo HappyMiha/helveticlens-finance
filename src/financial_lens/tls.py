@@ -23,7 +23,7 @@ def ensure_certificate(folder: Path) -> tuple[Path, Path, str]:
     cert_path, key_path = folder / "tls-cert.pem", folder / "tls-key.pem"
     if not cert_path.exists() or not key_path.exists():
         key = ec.generate_private_key(ec.SECP256R1())
-        name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, f"Financial Lens on {socket.gethostname()}")])
+        name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, f"Financial Lens on {socket.gethostname()}"[:64])])
         now = dt.datetime.now(dt.timezone.utc)
         cert = (x509.CertificateBuilder().subject_name(name).issuer_name(name).public_key(key.public_key())
                 .serial_number(x509.random_serial_number()).not_valid_before(now - dt.timedelta(days=1))
