@@ -38,7 +38,11 @@ def _invoice() -> bytes:
 
 def run(screenshot: str | None = None) -> int:
     report: dict = {"platform": sys.platform}
-    tmp = tempfile.mkdtemp(prefix="fl-selftest-")
+    # Not mkdtemp: its restrictive Windows ACL stops PostgreSQL's initdb from using the folder.
+    import uuid
+
+    tmp = os.path.join(tempfile.gettempdir(), "fl-selftest-" + uuid.uuid4().hex[:8])
+    os.makedirs(tmp)
     os.environ["FL_DATA"] = tmp
     os.environ.pop("FL_DSN", None)
     os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")

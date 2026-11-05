@@ -62,7 +62,11 @@ def dsn() -> str:
             if log:
                 detail += "".join(p.read_text(errors="replace")[-800:] for p in log.glob("*"))
             raise RuntimeError(f"Embedded PostgreSQL could not start: {exc}\n{detail}") from exc
-        db = _server.psql("SELECT 1 FROM pg_database WHERE datname='financial_lens'")
-        if "1 row" not in db:
-            _server.psql("CREATE DATABASE financial_lens")
+        # Create the database with psycopg, not pgserver's psql helper: that one runs through a shell
+        # and breaks on paths with spaces (e.g. "Financial Lens.app").
+        import psycopg
+
+        with psycopg.connect(_uri_to_dsn(_server.get_uri("postgres")), autocommit=True) as conn:
+            if not conn.execute("SELECT 1 FROM pg_database WHERE datname='financial_lens'").fetchone():
+                conn.execute("CREATE DATABASE financial_lens")
     return _uri_to_dsn(_server.get_uri("financial_lens"))
