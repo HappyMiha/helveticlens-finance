@@ -55,6 +55,12 @@ QTableWidget, QTextBrowser {{ background: {TOKENS['surface']}; border: 1px solid
   gridline-color: {TOKENS['line']}; selection-background-color: {TOKENS['raised']}; }}
 QHeaderView::section {{ background: {TOKENS['surface2']}; color: {TOKENS['muted']}; border: none; padding: 6px; }}
 QPushButton, QComboBox {{ background: {TOKENS['surface2']}; border: 1px solid {TOKENS['line_strong']}; border-radius: 6px; padding: 6px 12px; }}
+QLineEdit, QDateEdit, QSpinBox, QTextEdit {{ background: {TOKENS['surface2']}; color: {TOKENS['text']}; border: 1px solid {TOKENS['line_strong']};
+  border-radius: 6px; padding: 6px 10px; selection-background-color: {TOKENS['line_strong']}; }}
+QLineEdit:focus, QDateEdit:focus {{ border-color: {TOKENS['text']}; }}
+QComboBox QAbstractItemView, QCalendarWidget QWidget {{ background: {TOKENS['raised']}; color: {TOKENS['text']};
+  selection-background-color: {TOKENS['line_strong']}; }}
+QMessageBox {{ background: {TOKENS['bg']}; }}
 QPushButton#primary {{ background: {TOKENS['text']}; color: {TOKENS['bg']}; border-color: {TOKENS['text']}; font-weight: 600; }}
 QToolBar {{ background: {TOKENS['surface']}; border: none; border-bottom: 1px solid {TOKENS['line']}; padding: 6px; spacing: 6px; }}
 QToolBar QToolButton {{ background: {TOKENS['surface2']}; border: 1px solid {TOKENS['line_strong']}; border-radius: 6px; padding: 5px 12px; }}
@@ -860,9 +866,33 @@ def evidence_html(d: dict) -> str:
     return "".join(html)
 
 
+def install_error_reporting(app) -> Path:
+    """No error may vanish silently: show it and keep a log next to the data."""
+    import traceback
+
+    from .. import local_db
+
+    log = local_db.data_dir() / "logs" / "desktop.log"
+    log.parent.mkdir(parents=True, exist_ok=True)
+
+    def hook(kind, value, tb):
+        text = "".join(traceback.format_exception(kind, value, tb))
+        with open(log, "a", encoding="utf-8") as fh:
+            fh.write(f"\n--- {date.today().isoformat()}\n{text}")
+        if QApplication.instance() is not None:
+            box = QMessageBox(QMessageBox.Warning, "Financial Lens", f"Something went wrong: {value}\n\n"
+                              f"Details were saved to {log}. Please send that file if it keeps happening.")
+            box.setDetailedText(text[-4000:])
+            box.exec()
+
+    sys.excepthook = hook
+    return log
+
+
 def main() -> int:
     app = QApplication(sys.argv)
     app.setApplicationName("Financial Lens")
+    install_error_reporting(app)
     from .. import local_db, privacy
 
     dsn = local_db.dsn()  # own PostgreSQL via FL_DSN, otherwise the embedded one

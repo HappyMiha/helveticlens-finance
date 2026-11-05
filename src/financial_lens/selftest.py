@@ -86,11 +86,36 @@ def run(screenshot: str | None = None) -> int:
         w.resize(1280, 800)
         app.processEvents()
         report["window_expenses"] = w.kpi["expenses"].text()
+        # The phone pairing path: HTTPS server with the pinned certificate, pairing offer, two-step dialog.
+        import socket
+        import ssl
+        import hashlib
+        import time
+
+        from .api import mobile_v1
+        from .desktop.main import PairDialog
+
+        with socket.socket() as sk:
+            sk.bind(("127.0.0.1", 0))
+            os.environ["FL_MOBILE_PORT"] = str(sk.getsockname()[1])
+        port = w._ensure_lan_server()
+        served = None
+        for _ in range(100):
+            try:
+                served = hashlib.sha256(ssl.PEM_cert_to_DER_cert(ssl.get_server_certificate(("127.0.0.1", port)))).hexdigest()
+                break
+            except OSError:
+                app.processEvents()
+                time.sleep(0.2)
+        offer = mobile_v1.create_offer(lens, f"127.0.0.1:{port}", w._tls_fp, ("upload", "read"))
+        PairDialog(w, offer["uri"])
+        report["pairing"] = {"https": served is not None, "pinned_matches": served == w._tls_fp}
+        w._server.should_exit = True
         if screenshot:
             w.grab().save(screenshot)
         lens.close()
         ok = (report["ocr"]["amount"] == "184.50" and report["reconciled"] == "confirmed"
-              and report["qr"] == ["SPC\n0200\n1"] and report["window_expenses"] == "CHF 184.50")
+              and report["qr"] == ["SPC\n0200\n1"] and report["window_expenses"] == "CHF 184.50" and report.get("pairing", {}).get("pinned_matches") is True)
     except Exception as exc:  # report, do not hide
         import traceback
 
