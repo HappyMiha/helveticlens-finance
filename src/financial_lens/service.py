@@ -33,6 +33,20 @@ SPEND_KINDS = ("invoice", "receipt", "expense")
 INCOME_KINDS = ("income", "payslip", "contribution")
 
 
+# Role → allowed actions (§2 cooperatives: per-role access). "member" sees only its own data.
+PERMISSIONS = {
+    "owner": {"read", "write", "decide", "configure", "admin", "export"},
+    "admin": {"read", "write", "decide", "configure", "admin", "export"},
+    "editor": {"read", "write", "decide", "export"},
+    "viewer": {"read", "export"},
+    "member": {"read_own"},
+}
+
+
+class AccessDenied(PermissionError):
+    pass
+
+
 def _uuid() -> str:
     return str(uuid.uuid4())
 
@@ -82,6 +96,38 @@ class FinancialLens:
         self.ai = ai
         self.db = psycopg.connect(dsn, row_factory=dict_row, autocommit=True)
         self.org: Optional[str] = None
+        self.user_id: Optional[str] = None  # None = single-user local mode (owner)
+
+    # ---------------------------------------------------------------- access
+    def role(self) -> str:
+        if self.user_id is None:
+            return "owner"
+        row = self.db.execute("SELECT role FROM memberships WHERE organization_id=%s AND user_id=%s",
+                              (self.org, self.user_id)).fetchone()
+        return row["role"] if row else "none"
+
+    def authorize(self, action: str) -> None:
+        if action not in PERMISSIONS.get(self.role(), set()):
+            with self.db.transaction():
+                self._audit("access_denied", "organization", self.org or "", {"action": action, "user": self.user_id})
+            raise AccessDenied(f"Your role ({self.role()}) does not allow '{action}' in this organisation.")
+
+    def add_user(self, name: str, role: str) -> str:
+        self.authorize("admin")
+        uid = _uuid()
+        with self.db.transaction():
+            self.db.execute("INSERT INTO users (id, name) VALUES (%s,%s)", (uid, name))
+            self.db.execute("INSERT INTO memberships VALUES (%s,%s,%s)", (self.org, uid, role))
+            self._audit("grant", "membership", uid, {"name": name, "role": role})
+        return uid
+
+    def as_user(self, user_id: Optional[str]) -> "FinancialLens":
+        self.user_id = user_id
+        self.actor = f"user:{user_id}" if user_id else "user:local"
+        return self
+
+    def organizations(self) -> list[dict]:
+        return [self._json(r) for r in self.db.execute("SELECT * FROM organizations ORDER BY name").fetchall()]
 
     # ------------------------------------------------------------------ setup
     def migrate(self) -> None:
@@ -160,6 +206,7 @@ class FinancialLens:
         return ("Unclassified",)
 
     def rename_category(self, category_id: str, name: str) -> None:
+        self.authorize("configure")
         with self.db.transaction():
             old = self.db.execute("SELECT name FROM categories WHERE id=%s", (category_id,)).fetchone()
             self.db.execute("UPDATE categories SET name=%s WHERE id=%s", (name, category_id))
@@ -172,6 +219,7 @@ class FinancialLens:
         return [(r["field"], r["pattern"], self.category_path(r["category_id"]), r["origin"]) for r in rows]
 
     def add_rule(self, field: str, pattern: str, path: tuple[str, ...], origin: str = "user") -> None:
+        self.authorize("configure")
         cid = self.category_id(path)
         with self.db.transaction():
             self.db.execute(
@@ -199,7 +247,8 @@ class FinancialLens:
         merged = {k: current.get(k) for k in (
             "amount", "currency", "fx_rate", "fx_source", "op_date", "due_date", "counterparty", "description",
             "category_id", "project_id", "account_id", "reference", "bank_reference", "period", "verification",
-            "verification_reason", "source_document_id", "method", "agent", "confidence", "provenance")}
+            "verification_reason", "source_document_id", "method", "agent", "confidence", "provenance",
+            "object_id", "member_id", "fund_id", "scope", "expense_class")}
         merged.update(values)
         merged.setdefault("agent", self.actor)
         if merged.get("period") is None and merged.get("op_date"):
@@ -218,14 +267,17 @@ class FinancialLens:
         self.db.execute(
             "INSERT INTO operation_revisions (id, operation_id, revision, amount, currency, fx_rate, fx_source, op_date, "
             "due_date, counterparty, description, category_id, project_id, account_id, reference, bank_reference, period, "
-            "verification, verification_reason, source_document_id, method, agent, confidence, provenance, change_reason) "
-            "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+            "verification, verification_reason, source_document_id, method, agent, confidence, provenance, change_reason, "
+            "object_id, member_id, fund_id, scope, expense_class) "
+            "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
             (rid, op, number, amount, cur, merged.get("fx_rate"), merged.get("fx_source"), merged["op_date"],
              merged.get("due_date"), merged.get("counterparty") or "", merged.get("description") or "",
              merged.get("category_id"), merged.get("project_id"), merged.get("account_id"), merged.get("reference"),
              merged.get("bank_reference"), merged.get("period"), merged["verification"],
              merged.get("verification_reason") or "", merged.get("source_document_id"), merged["method"],
-             merged["agent"], merged.get("confidence"), Jsonb(merged.get("provenance") or {}), change_reason))
+             merged["agent"], merged.get("confidence"), Jsonb(merged.get("provenance") or {}), change_reason,
+             merged.get("object_id"), merged.get("member_id"), merged.get("fund_id"), merged.get("scope"),
+             merged.get("expense_class")))
         self._audit("revise" if not first else "create", "operation", op,
                     {"revision": number, "reason": change_reason,
                      "changed": sorted(k for k in values if k != "provenance")}, actor=merged["agent"])
@@ -233,6 +285,7 @@ class FinancialLens:
 
     def add_manual(self, kind: str, amount: str, currency: str, op_date: date, counterparty: str,
                    category: Optional[tuple[str, ...]] = None, description: str = "") -> str:
+        self.authorize("write")
         with self.db.transaction():
             sug = None
             if category is None:
@@ -250,6 +303,7 @@ class FinancialLens:
         return op
 
     def correct(self, op: str, changes: dict, reason: str, actor: Optional[str] = None) -> str:
+        self.authorize("write")
         """A person corrects or confirms a record. Creates a revision; never overwrites."""
         actor = actor or self.actor
         values = dict(changes)
@@ -286,6 +340,7 @@ class FinancialLens:
     # --------------------------------------------------------------- ingest
     def ingest(self, data: bytes, filename: str, media_type: Optional[str] = None,
                privacy: str = "local_only") -> IngestResult:
+        self.authorize("write")
         media_type = media_type or _sniff(data, filename)
         sha, key = self.files.put(data)
         existing = self.db.execute("SELECT id, doc_type FROM documents WHERE organization_id=%s AND sha256=%s",
@@ -690,6 +745,7 @@ class FinancialLens:
                            "partial payment linked")
 
     def decide_link(self, link_id: str, accept: bool, actor: Optional[str] = None) -> None:
+        self.authorize("decide")
         actor = actor or self.actor
         with self.db.transaction():
             link = self.db.execute("SELECT * FROM links WHERE id=%s AND organization_id=%s", (link_id, self.org)).fetchone()
@@ -732,6 +788,7 @@ class FinancialLens:
 
     # --------------------------------------------------------------- FX
     def set_fx_rate(self, currency: str, rate_date: date, rate_to_base: str, source: str) -> None:
+        self.authorize("configure")
         with self.db.transaction():
             self.db.execute("INSERT INTO fx_rates (currency, rate_date, rate_to_base, base, source, recorded_by) "
                             "VALUES (%s,%s,%s,%s,%s,%s) ON CONFLICT DO NOTHING",
@@ -748,6 +805,7 @@ class FinancialLens:
         return row["rate_to_base"], f"{row['source']} ({row['rate_date']:%d.%m.%Y})"
 
     def tag(self, op: str, name: str) -> None:
+        self.authorize("write")
         with self.db.transaction():
             row = self.db.execute("INSERT INTO tags (id, organization_id, name) VALUES (%s,%s,%s) "
                                   "ON CONFLICT (organization_id, name) DO UPDATE SET name=EXCLUDED.name RETURNING id",
@@ -756,6 +814,7 @@ class FinancialLens:
             self._audit("tag", "operation", op, {"tag": name})
 
     def untag(self, op: str, name: str) -> None:
+        self.authorize("write")
         with self.db.transaction():
             self.db.execute("DELETE FROM operation_tags t USING tags g WHERE t.tag_id=g.id AND t.operation_id=%s "
                             "AND g.name=%s", (op, name))
@@ -810,9 +869,20 @@ class FinancialLens:
             return None
         return (Decimal(amount) * rate).quantize(Decimal("0.01"))
 
-    def treemap(self, start: date, end: date, mode: str = "expenses") -> dict:
+    def treemap(self, start: date, end: date, mode: str = "expenses", group: str = "category") -> dict:
+        """Toggles (§6.1): expenses or income; grouped by category, account, project, counterparty or object."""
+        self.authorize("read")
         rows = self._spend_rows(start, end) if mode == "expenses" else self._income_rows(start, end)
         paths = {c["id"]: c["path"] for c in self.categories()}
+        if group != "category":
+            table = {"account": "accounts", "project": "projects", "object": "objects", "member": "members"}.get(group)
+            names = {str(r["id"]): r["name"] for r in self.db.execute(
+                f"SELECT id, name FROM {table} WHERE organization_id=%s", (self.org,)).fetchall()} if table else {}
+            for r in rows:
+                label = (r["counterparty"] or "(unknown)") if group == "counterparty" else \
+                    names.get(str(r.get(f"{group}_id")), f"(no {group})")
+                paths[f"g:{r['operation_id']}"] = (label,)
+                r["category_id"] = f"g:{r['operation_id']}"
         root: dict = {"name": "All", "total": Decimal(0), "children": {}, "operations": [], "count": 0}
         unconverted = []
         for r in rows:
@@ -821,6 +891,8 @@ class FinancialLens:
                 unconverted.append(str(r["operation_id"]))
                 continue
             path = paths.get(str(r["category_id"]), ("Unclassified",))
+            if group == "category" and path[0] == "Own transfers":
+                continue
             node = root
             node["total"] += value
             node["count"] += 1
@@ -841,7 +913,7 @@ class FinancialLens:
                     "operations": sorted(n["operations"], key=lambda o: -Decimal(o["amount"]))}
 
         out = finish(root)
-        out.update({"currency": BASE, "start": start.isoformat(), "end": end.isoformat(), "mode": mode,
+        out.update({"currency": BASE, "start": start.isoformat(), "end": end.isoformat(), "mode": mode, "group": group,
                     "unconverted": unconverted})
         return out
 
@@ -862,6 +934,7 @@ class FinancialLens:
         return out
 
     def dashboard(self, start: date, end: date) -> dict:
+        self.authorize("read")
         spend = sum((self._in_base(r) or Decimal(0)) for r in self._spend_rows(start, end))
         income = sum((self._in_base(r) or Decimal(0)) for r in self._income_rows(start, end))
         unconfirmed = self.db.execute(
@@ -903,6 +976,7 @@ class FinancialLens:
         return out
 
     def operation_detail(self, op: str) -> dict:
+        self.authorize("read")
         cur = self.db.execute
         current = cur("SELECT * FROM operations_current WHERE operation_id=%s", (op,)).fetchone()
         history = cur("SELECT * FROM operation_revisions WHERE operation_id=%s ORDER BY revision", (op,)).fetchall()
@@ -929,11 +1003,13 @@ class FinancialLens:
         return result
 
     def original(self, document_id: str) -> tuple[bytes, str, str]:
+        self.authorize("read")
         row = self.db.execute("SELECT sha256, media_type, filename FROM documents WHERE id=%s AND organization_id=%s",
                               (document_id, self.org)).fetchone()
         return self.files.get(row["sha256"]), row["media_type"], row["filename"]
 
     def documents(self) -> list[dict]:
+        self.authorize("read")
         rows = self.db.execute(
             "SELECT d.*, (SELECT count(*) FROM document_operations o WHERE o.document_id=d.id) AS operations "
             "FROM documents d WHERE organization_id=%s ORDER BY received_at DESC", (self.org,)).fetchall()

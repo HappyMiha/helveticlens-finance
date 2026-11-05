@@ -243,12 +243,25 @@ class MainWindow(QMainWindow):
         self.view_mode.addItems(["Expenses", "Income"])
         imp = QAction("Import files…", self)
         imp.triggered.connect(self.import_dialog)
+        self.org_box = QComboBox()
+        self.org_box.addItems([o["name"] for o in self.lens.organizations()])
+        self.org_box.setCurrentText(next(o["name"] for o in self.lens.organizations() if o["id"] == self.lens.org))
+        self.org_box.currentTextChanged.connect(self._switch_org)
+        self.group_box = QComboBox()
+        self.group_box.addItems(["By category", "By account", "By project", "By counterparty", "By object"])
+        self.group_box.currentTextChanged.connect(lambda _: (setattr(self, "path", ()), self.refresh()))
+        exp = QAction("Export…", self)
+        exp.triggered.connect(self.export_dialog)
+        bar.addWidget(QLabel("  Profile "))
+        bar.addWidget(self.org_box)
         bar.addWidget(QLabel("  Period "))
         bar.addWidget(self.period)
         bar.addWidget(QLabel("  Show "))
         bar.addWidget(self.view_mode)
+        bar.addWidget(self.group_box)
         bar.addSeparator()
         bar.addAction(imp)
+        bar.addAction(exp)
 
         self.stack.addWidget(self._overview())
         self.inbox = table(["Type", "Item", "Status", "Reason"])
@@ -420,7 +433,8 @@ class MainWindow(QMainWindow):
              [r["operation_id"] for r in d["unpaid"]])
         fill(self.recent, [[r["filename"], r["doc_type"], r["processing_status"]] for r in d["recent_documents"]],
              [r["id"] for r in d["recent_documents"]])
-        self.tree = self.lens.treemap(start, end, self.mode)
+        group = self.group_box.currentText().removeprefix("By ").lower()
+        self.tree = self.lens.treemap(start, end, self.mode, group)
         self.open_category(self.path)
         self._other_screens()
 
@@ -525,6 +539,33 @@ class MainWindow(QMainWindow):
         fill(self.inbox, [["Proposed link", f"{p['counterparty']} · {chf(p['amount'])}", "proposed", "; ".join(p["reasons"])]
                           for p in proposed] + [["Document", d["filename"], d["processing_status"], d["doc_type"]] for d in review],
              [("link", str(p["id"])) for p in proposed] + [("doc", d["id"]) for d in review])
+
+    def _switch_org(self, name: str) -> None:
+        if name:
+            self.lens.open_organization(name)
+            self.path = ()
+            self.refresh()
+
+    def export_dialog(self) -> None:
+        from .. import reports
+
+        path, _ = QFileDialog.getSaveFileName(self, "Export", f"financial-lens-{self.today}.zip",
+                                              "Full archive (*.zip);;Report CSV (*.csv);;Report Excel (*.xlsx);;Report PDF (*.pdf)")
+        if path:
+            self.export_to(Path(path))
+
+    def export_to(self, path: Path) -> Path:
+        from .. import reports
+
+        start, end = self.span()
+        if path.suffix == ".zip":
+            reports.export_archive(self.lens, path)
+            return path
+        rows = reports.report(self.lens, start, end, "category", "month", self.mode)
+        data = {".csv": reports.to_csv, ".xlsx": reports.to_xlsx, ".json": reports.to_json}.get(path.suffix)
+        path.write_bytes(data(rows) if data else reports.to_pdf(f"{self.mode.title()} {start} – {end}", rows,
+                                                                ["period", "category", "total", "count"]))
+        return path
 
     def _decide(self, accept: bool) -> None:
         items = self.inbox.selectedItems()

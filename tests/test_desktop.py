@@ -62,3 +62,15 @@ def test_desktop_drilldown(lens, tmp_path):
     app.processEvents()
     assert w.flow.rowCount() == 1
     w.grab().save(str(out / "desktop-analytics.png"))
+
+    assert w.export_to(tmp_path / "r.pdf").read_bytes().startswith(b"%PDF")
+    assert zipfile_ok(w.export_to(tmp_path / "all.zip"))
+    w.nav.setCurrentRow(0)
+    w.group_box.setCurrentText("By counterparty")
+    assert {e["name"] for e in w.treemap._entries()} == {"Elektrizitätswerk Limmattal AG", "Migros Zuerich"}
+
+
+def zipfile_ok(path):
+    import zipfile
+    with zipfile.ZipFile(path) as z:
+        return z.testzip() is None and "manifest.json" in z.namelist()

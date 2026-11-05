@@ -250,4 +250,88 @@ CREATE TABLE IF NOT EXISTS recurring_rules (
   UNIQUE (organization_id, counterparty, cadence)
 );
 
-INSERT INTO schema_version (version) VALUES (1), (2) ON CONFLICT DO NOTHING;
+
+-- v3: Phase 3 — multi-profile, cooperatives, projects, budgets, permissions.
+CREATE TABLE IF NOT EXISTS objects (
+  id uuid PRIMARY KEY,
+  organization_id uuid NOT NULL REFERENCES organizations(id),
+  name text NOT NULL,
+  kind text NOT NULL DEFAULT 'property' CHECK (kind IN ('property','unit','vehicle','equipment','other')),
+  parent_id uuid REFERENCES objects(id),
+  UNIQUE (organization_id, name)
+);
+
+CREATE TABLE IF NOT EXISTS members (
+  id uuid PRIMARY KEY,
+  organization_id uuid NOT NULL REFERENCES organizations(id),
+  member_no text NOT NULL,
+  name text NOT NULL,
+  object_id uuid REFERENCES objects(id),
+  share_capital numeric(20,4) NOT NULL DEFAULT 0,
+  joined_on date NOT NULL,
+  left_on date,
+  user_id uuid REFERENCES users(id),
+  UNIQUE (organization_id, member_no)
+);
+
+CREATE TABLE IF NOT EXISTS member_dues (
+  id uuid PRIMARY KEY,
+  organization_id uuid NOT NULL REFERENCES organizations(id),
+  member_id uuid NOT NULL REFERENCES members(id),
+  period text NOT NULL,
+  amount numeric(20,4) NOT NULL CHECK (amount > 0),
+  currency char(3) NOT NULL DEFAULT 'CHF',
+  due_date date NOT NULL,
+  purpose text NOT NULL DEFAULT 'contribution',
+  fund_id uuid,
+  UNIQUE (member_id, period, purpose)
+);
+
+CREATE TABLE IF NOT EXISTS funds (
+  id uuid PRIMARY KEY,
+  organization_id uuid NOT NULL REFERENCES organizations(id),
+  name text NOT NULL,
+  purpose text NOT NULL DEFAULT '',
+  earmarked boolean NOT NULL DEFAULT true,
+  UNIQUE (organization_id, name)
+);
+
+CREATE TABLE IF NOT EXISTS budgets (
+  id uuid PRIMARY KEY,
+  organization_id uuid NOT NULL REFERENCES organizations(id),
+  category_id uuid REFERENCES categories(id),
+  project_id uuid REFERENCES projects(id),
+  period_start date NOT NULL,
+  period_end date NOT NULL,
+  amount numeric(20,4) NOT NULL CHECK (amount >= 0),
+  created_by text NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  CHECK (period_end >= period_start)
+);
+
+CREATE TABLE IF NOT EXISTS allocations (
+  id uuid PRIMARY KEY,
+  organization_id uuid NOT NULL REFERENCES organizations(id),
+  operation_id uuid NOT NULL REFERENCES operations(id),
+  object_id uuid REFERENCES objects(id),
+  member_id uuid REFERENCES members(id),
+  amount numeric(20,4) NOT NULL,
+  basis text NOT NULL,                 -- e.g. "area m²", "equal", "share"
+  created_by text NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+-- Classification beyond category (§4.4, §2): object, member, fund, scope and expense class.
+ALTER TABLE operation_revisions ADD COLUMN IF NOT EXISTS object_id uuid REFERENCES objects(id);
+ALTER TABLE operation_revisions ADD COLUMN IF NOT EXISTS member_id uuid REFERENCES members(id);
+ALTER TABLE operation_revisions ADD COLUMN IF NOT EXISTS fund_id uuid REFERENCES funds(id);
+ALTER TABLE operation_revisions ADD COLUMN IF NOT EXISTS scope text CHECK (scope IN ('personal','business'));
+ALTER TABLE operation_revisions ADD COLUMN IF NOT EXISTS expense_class text CHECK (expense_class IN ('opex','capex'));
+
+CREATE OR REPLACE VIEW operations_current AS
+SELECT DISTINCT ON (r.operation_id)
+  o.organization_id, o.kind, o.created_at AS operation_created_at, r.*
+FROM operation_revisions r JOIN operations o ON o.id = r.operation_id
+ORDER BY r.operation_id, r.revision DESC;
+
+INSERT INTO schema_version (version) VALUES (1), (2), (3) ON CONFLICT DO NOTHING;

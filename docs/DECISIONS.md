@@ -16,3 +16,8 @@ Each entry: date · decision · reason.
 - 2026-11-05 · Exchange rates are recorded with their source; an operation without a rate within 40 days is shown as unconverted, never estimated.
 - 2026-11-05 · The assistant (§11) parses questions with deterministic patterns (en/de/fr/uk); an optional model may only translate a question into a query, never produce a number.
 - 2026-11-05 · Desktop UI in PySide6 widgets talking to the service in-process; the FastAPI service exposes the same operations for other clients.
+- 2026-11-05 · Multi-profile (§2): each organisation (personal, business, cooperative) has its own categories, rules, accounts and ledger; the desktop switches profile from the toolbar.
+- 2026-11-05 · Roles: owner/admin (everything), editor (import, correct, decide, export), viewer (read, export), member (own statement only). Denied attempts are written to the audit log. Local single-user mode acts as owner.
+- 2026-11-05 · Member contributions: a member number in the payment text confirms the contribution; a matching name alone is only proposed. Confirmed payments are allocated to dues oldest first; arrears = overdue open dues.
+- 2026-11-05 · Cost allocation across objects uses integer weights (e.g. m²) and the cent-exact `Money.allocate`.
+- 2026-11-05 · PDF reports are produced by a small built-in writer (no external dependency); the full archive is a ZIP with every table as JSON and CSV, all originals in their virtual folders and a SHA-256 manifest.

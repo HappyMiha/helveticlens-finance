@@ -127,7 +127,8 @@ class Correction(BaseModel):
 
 @app.post("/operations/{op_id}/corrections")
 def correct(op_id: str, body: Correction, fl: FinancialLens = Depends(lens)) -> dict:
-    allowed = {"amount", "currency", "op_date", "due_date", "counterparty", "description", "category", "confirm"}
+    allowed = {"amount", "currency", "op_date", "due_date", "counterparty", "description", "category", "confirm",
+               "project_id", "object_id", "member_id", "fund_id", "scope", "expense_class", "reference"}
     if set(body.changes) - allowed:
         raise HTTPException(422, f"Only {sorted(allowed)} can be corrected.")
     return {"revision_id": fl.correct(op_id, body.changes, body.reason)}
@@ -221,3 +222,95 @@ class Rate(BaseModel):
 def fx_rate(body: Rate, fl: FinancialLens = Depends(lens)) -> dict:
     fl.set_fx_rate(body.currency.upper(), body.rate_date, body.rate_to_chf, body.source)
     return {"status": "ok"}
+
+
+# ---------------------------------------------------------------- Phase 3
+from fastapi.responses import FileResponse  # noqa: E402
+
+from .. import orgs as _orgs  # noqa: E402
+from .. import reports as _rep  # noqa: E402
+
+
+@app.get("/organizations")
+def organizations(fl: FinancialLens = Depends(lens)) -> list[dict]:
+    return fl.organizations()
+
+
+class Org(BaseModel):
+    name: str
+    kind: str = "personal"
+
+
+@app.post("/organizations/open")
+def open_org(body: Org, fl: FinancialLens = Depends(lens)) -> dict:
+    return {"id": fl.open_organization(body.name, body.kind)}
+
+
+class Member(BaseModel):
+    member_no: str
+    name: str
+    joined_on: date
+    object_id: Optional[str] = None
+    share_capital: str = "0"
+
+
+@app.post("/members")
+def add_member(body: Member, fl: FinancialLens = Depends(lens)) -> dict:
+    return {"id": _orgs.add_member(fl, body.member_no, body.name, body.joined_on, body.object_id, body.share_capital)}
+
+
+class Dues(BaseModel):
+    period: str
+    amount: str
+    due_date: date
+    purpose: str = "contribution"
+    fund_id: Optional[str] = None
+
+
+@app.post("/members/{member_id}/dues")
+def dues(member_id: str, body: Dues, fl: FinancialLens = Depends(lens)) -> dict:
+    return {"id": _orgs.set_dues(fl, member_id, body.period, body.amount, body.due_date, body.purpose, body.fund_id)}
+
+
+@app.get("/members/{member_id}/statement")
+def member_statement(member_id: str, fl: FinancialLens = Depends(lens)) -> dict:
+    return _orgs.member_statement(fl, member_id)
+
+
+@app.post("/members/match-contributions")
+def match(fl: FinancialLens = Depends(lens)) -> list[dict]:
+    return _orgs.match_contributions(fl)
+
+
+@app.get("/arrears")
+def arrears(fl: FinancialLens = Depends(lens)) -> list[dict]:
+    return _orgs.arrears(fl)
+
+
+@app.get("/budgets")
+def budgets(fl: FinancialLens = Depends(lens)) -> list[dict]:
+    return _orgs.budget_vs_actual(fl)
+
+
+@app.get("/reports")
+def report(start: date, end: date, group_by: str = "category", period: str = "month", mode: str = "expenses",
+           format: str = "json", fl: FinancialLens = Depends(lens)) -> Response:
+    rows = _rep.report(fl, start, end, group_by, period, mode)
+    if format == "csv":
+        return Response(_rep.to_csv(rows), media_type="text/csv")
+    if format == "xlsx":
+        return Response(_rep.to_xlsx(rows), media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+    if format == "pdf":
+        return Response(_rep.to_pdf(f"{mode.title()} by {group_by}, {start} – {end}", rows,
+                                    ["period", group_by, "total", "count"]), media_type="application/pdf")
+    return Response(_rep.to_json(rows), media_type="application/json")
+
+
+@app.post("/export")
+def export(fl: FinancialLens = Depends(lens)) -> FileResponse:
+    import tempfile
+    from pathlib import Path
+
+    target = Path(tempfile.mkdtemp()) / f"financial-lens-export-{date.today()}.zip"
+    _rep.export_archive(fl, target)
+    return FileResponse(target, filename=target.name, media_type="application/zip")
