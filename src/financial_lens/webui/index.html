@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en-CH">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Financial Lens</title>
+  <link rel="icon" href="/ui/static/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/ui/static/tokens.css">
+  <link rel="stylesheet" href="/ui/static/app.css">
+</head>
+<body>
+  <div class="shell">
+    <nav class="side" aria-label="Main">
+      <a class="brand" href="#/overview"><img src="/ui/static/favicon.svg" alt=""> Financial Lens</a>
+      <a href="#/overview" data-nav="overview">Overview</a>
+      <a href="#/inbox" data-nav="inbox">Inbox <span id="inbox-count" class="pill" hidden></span></a>
+      <a href="#/documents" data-nav="documents">Documents</a>
+      <a href="#/transactions" data-nav="transactions">Transactions</a>
+      <a href="#/analytics" data-nav="analytics">Analytics</a>
+      <a href="#/ask" data-nav="ask">Ask</a>
+      <a href="#/phone" data-nav="phone">Phone</a>
+      <a href="#/settings" data-nav="settings">Settings</a>
+      <div class="side-foot" id="side-foot"></div>
+    </nav>
+    <div class="main">
+      <header class="bar">
+        <label class="ctl">Period
+          <select id="period">
+            <option value="this_month">This month</option><option value="last_month">Last month</option>
+            <option value="this_quarter">This quarter</option><option value="this_year">This year</option>
+            <option value="last_year">Last year</option><option value="all">All time</option>
+          </select>
+        </label>
+        <label class="ctl">Show
+          <select id="mode"><option value="expenses">Expenses</option><option value="income">Income</option></select>
+        </label>
+        <label class="ctl">Group
+          <select id="group"><option value="category">By category</option><option value="counterparty">By counterparty</option>
+            <option value="account">By account</option><option value="project">By project</option><option value="object">By object</option></select>
+        </label>
+        <span class="grow"></span>
+        <label class="btn primary" for="file-input">Add documents</label>
+        <input id="file-input" type="file" multiple hidden>
+      </header>
+      <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+      <main id="view" tabindex="-1"></main>
+    </div>
+  </div>
+  <div id="drop" class="drop" hidden><div>Drop receipts, invoices and statements</div></div>
+  <script src="/ui/static/app.js" defer></script>
+</body>
+</html>

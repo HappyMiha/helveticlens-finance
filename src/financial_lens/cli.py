@@ -72,6 +72,9 @@ def main(argv=None) -> int:
     s.add_argument("--host", default="127.0.0.1")
     s.add_argument("--port", type=int, default=8765)
     sub.add_parser("desktop")
+    sv = sub.add_parser("service", help="run the local service and open the web interface")
+    sv.add_argument("--no-browser", action="store_true")
+    sv.add_argument("--no-tray", action="store_true")
     b = sub.add_parser("backup")
     b.add_argument("dir")
     r = sub.add_parser("restore")
@@ -143,6 +146,10 @@ def main(argv=None) -> int:
             if model:
                 print(E.report(f"{label} · rules + {args.model_name}", E.run(docs, model, say)))
         return 0
+    if args.cmd == "service":
+        from .launcher import main as service_main
+
+        return service_main((["--no-browser"] if args.no_browser else []) + (["--no-tray"] if args.no_tray else []))
     if args.cmd == "desktop":
         from .desktop.main import main as desktop
 

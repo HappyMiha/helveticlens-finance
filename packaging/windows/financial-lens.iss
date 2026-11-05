@@ -35,6 +35,23 @@ Name: "{userdesktop}\Financial Lens"; Filename: "{app}\FinancialLens.exe"; Tasks
 
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; Flags: unchecked
+Name: "autostart"; Description: "Start Financial Lens with Windows (runs in the background, tray icon)"
+
+[Registry]
+; The user's own Run key: no administrator rights. The tray menu can switch it off.
+Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "FinancialLens"; ValueData: """{app}\FinancialLens.exe"" --service"; Flags: uninsdeletevalue; Tasks: autostart
+
+[UninstallRun]
+Filename: "taskkill.exe"; Parameters: "/F /IM FinancialLens.exe"; Flags: runhidden; RunOnceId: "StopService"
+
+[Code]
+// An update replaces files the running service holds open: stop it first.
+function PrepareToInstall(var NeedsRestart: Boolean): String;
+var Code: Integer;
+begin
+  Exec('taskkill.exe', '/F /IM FinancialLens.exe', '', SW_HIDE, ewWaitUntilTerminated, Code);
+  Result := '';
+end;
 
 [Run]
 Filename: "{app}\FinancialLens.exe"; Description: "{cm:LaunchProgram,Financial Lens}"; Flags: nowait postinstall skipifsilent

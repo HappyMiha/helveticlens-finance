@@ -112,11 +112,39 @@ def run(screenshot: str | None = None) -> int:
         PairDialog(w, offer["uri"])
         report["pairing"] = {"https": served is not None, "pinned_matches": served == w._tls_fp}
         w._server.should_exit = True
+        # The local service with its web page, as the installed app starts it.
+        import http.cookiejar
+        import urllib.error
+        import urllib.request
+
+        from . import launcher
+
+        with socket.socket() as sk:
+            sk.bind(("127.0.0.1", 0))
+            launcher.PORT = sk.getsockname()[1]
+        svc = launcher.Service()
+        key = svc.start()
+        base = f"http://127.0.0.1:{launcher.PORT}"
+        jar = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()))
+        page = jar.open(base + "/ui", timeout=10).read().decode()
+        try:
+            jar.open(base + "/dashboard", timeout=10)
+            locked = False
+        except urllib.error.HTTPError as e:
+            locked = e.code == 401
+        jar.open(urllib.request.Request(base + "/ui/session", data=json.dumps({"key": key}).encode(),
+                                        headers={"Content-Type": "application/json"}), timeout=10).read()
+        me = json.loads(jar.open(base + "/ui/me", timeout=10).read())
+        js = jar.open(base + "/ui/static/app.js", timeout=10).read()
+        report["web"] = {"page": "app.js" in page, "locked_without_key": locked, "session": bool(me.get("csrf")),
+                         "assets": len(js) > 1000, "running": launcher.running()}
+        svc.stop()
         if screenshot:
             w.grab().save(screenshot)
         lens.close()
         ok = (report["ocr"]["amount"] == "184.50" and report["reconciled"] == "confirmed"
-              and report["qr"] == ["SPC\n0200\n1"] and report["window_expenses"] == "CHF 184.50" and report.get("pairing", {}).get("pinned_matches") is True)
+              and report["qr"] == ["SPC\n0200\n1"] and report["window_expenses"] == "CHF 184.50" and report.get("pairing", {}).get("pinned_matches") is True
+              and all(report.get("web", {}).values()) and len(report.get("web", {})) == 5)
     except Exception as exc:  # report, do not hide
         import traceback
 

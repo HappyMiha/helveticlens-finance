@@ -85,7 +85,9 @@ def is_local_client(request: Request) -> bool:
 
 async def lan_gate(request: Request, call_next):
     """Phones on the LAN may use the upload page only."""
-    if not is_local_client(request) and not request.url.path.startswith(PUBLIC_PATHS):
+    path = request.url.path
+    public = path in ("/m", "/health") or path.startswith(("/m/", "/mobile/v1/"))  # not "/members" etc.
+    if not is_local_client(request) and not public:
         return JSONResponse({"detail": "Only the phone upload page is available from the network."}, status_code=403)
     return await call_next(request)
 

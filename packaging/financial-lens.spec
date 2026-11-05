@@ -28,7 +28,7 @@ for f in _pgdir.rglob("*"):
     rel = f.relative_to(_pgdir)
     if f.is_file() and f.suffix not in (".a", ".pyc") and "include" not in rel.parts and "__pycache__" not in rel.parts:
         datas.append((str(f), str(Path("pgserver") / rel.parent)))
-datas += collect_data_files("financial_lens", includes=["**/*.sql", "assets/*"])
+datas += collect_data_files("financial_lens", includes=["**/*.sql", "assets/*", "webui/*"])
 hidden += ["financial_lens.selftest"]
 
 # Tesseract: FL_TESSERACT_DIR points at a folder with the executable (and its DLLs on Windows) and tessdata/.
@@ -58,4 +58,4 @@ coll = COLLECT(exe, a.binaries, a.datas, name="FinancialLens")
 if sys.platform == "darwin":
     app = BUNDLE(coll, name="Financial Lens.app", icon=icon if Path(icon).exists() else None,
                  bundle_identifier="ch.helveticlens.finance",
-                 info_plist={"NSHighResolutionCapable": True, "CFBundleShortVersionString": os.environ.get("FL_VERSION", "0.5.0")})
+                 info_plist={"NSHighResolutionCapable": True, "LSUIElement": True, "CFBundleShortVersionString": os.environ.get("FL_VERSION", "0.5.0")})

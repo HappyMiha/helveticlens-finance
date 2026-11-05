@@ -13,7 +13,7 @@ from functools import lru_cache
 from typing import Optional
 
 from fastapi import Depends, FastAPI, HTTPException, UploadFile
-from fastapi.responses import Response
+from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel
 
 from ..service import FinancialLens
@@ -50,8 +50,8 @@ def _period(start: Optional[date], end: Optional[date]) -> tuple[date, date]:
 
 
 @app.get("/health")
-def health() -> dict:
-    return {"status": "ok"}
+def health() -> JSONResponse:
+    return JSONResponse({"status": "ok"}, headers={"X-Financial-Lens": "1"})
 
 
 @app.post("/documents")
@@ -87,10 +87,12 @@ def dashboard(start: Optional[date] = None, end: Optional[date] = None, fl: Fina
 
 @app.get("/treemap")
 def treemap(start: Optional[date] = None, end: Optional[date] = None, mode: str = "expenses",
-            fl: FinancialLens = Depends(lens)) -> dict:
+            group: str = "category", fl: FinancialLens = Depends(lens)) -> dict:
     if mode not in ("expenses", "income"):
         raise HTTPException(422, "mode is expenses or income")
-    return fl.treemap(*_period(start, end), mode)
+    if group not in ("category", "counterparty", "account", "project", "object", "member"):
+        raise HTTPException(422, "unknown group")
+    return fl.treemap(*_period(start, end), mode, group)
 
 
 @app.get("/operations")
@@ -382,3 +384,35 @@ def mail_fetch(body: MailFetch, fl: FinancialLens = Depends(lens)) -> dict:
 from . import mobile_v1 as _mv1  # noqa: E402
 
 app.include_router(_mv1.make_router(lens))
+
+
+# ----------------------------------------------------------- local web interface
+from . import webui as _web  # noqa: E402
+
+app.middleware("http")(_web.guard)
+app.include_router(_web.make_router(lens))
+
+
+@app.get("/ui/transactions")
+def ui_transactions(start: Optional[date] = None, end: Optional[date] = None, fl: FinancialLens = Depends(lens)) -> list[dict]:
+    fl.authorize("read")
+    s, e = _period(start, end)
+    rows = fl.db.execute(
+        "SELECT operation_id, kind, op_date, counterparty, category_id, amount, currency, verification FROM operations_current "
+        "WHERE organization_id=%s AND op_date BETWEEN %s AND %s ORDER BY op_date DESC, operation_id", (fl.org, s, e)).fetchall()
+    return [{**fl._json(r), "category": " / ".join(fl.category_path(r["category_id"]))} for r in rows]
+
+
+@app.get("/ui/inbox")
+def ui_inbox(fl: FinancialLens = Depends(lens)) -> dict:
+    fl.authorize("read")
+    proposed = fl.db.execute(
+        "SELECT l.id, l.link_type, l.rule, l.reasons, f.counterparty, f.amount, f.currency, f.op_date, f.operation_id AS op, "
+        "t.counterparty AS other, t.op_date AS other_date FROM links l JOIN operations_current f ON f.operation_id=l.from_operation_id "
+        "JOIN operations_current t ON t.operation_id=l.to_operation_id WHERE l.organization_id=%s AND l.status='proposed' "
+        "ORDER BY f.op_date DESC", (fl.org,)).fetchall()
+    review = fl.db.execute(
+        "SELECT operation_id, kind, op_date, counterparty, amount, currency, verification_reason FROM operations_current "
+        "WHERE organization_id=%s AND verification='needs_review' ORDER BY op_date DESC LIMIT 200", (fl.org,)).fetchall()
+    docs = [d for d in fl.documents() if d["processing_status"] in ("needs_review", "failed")]
+    return {"links": [fl._json(r) for r in proposed], "review": [fl._json(r) for r in review], "documents": docs}

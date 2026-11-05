@@ -5,6 +5,10 @@ if __name__ == "__main__":
         from financial_lens.selftest import run
 
         sys.exit(run(sys.argv[2] if len(sys.argv) > 2 else None))
-    from financial_lens.desktop.main import main
+    if "--window" in sys.argv:  # the previous Qt window, kept while the web interface settles in
+        from financial_lens.desktop.main import main
+
+        sys.exit(main())
+    from financial_lens.launcher import main
 
     sys.exit(main())
