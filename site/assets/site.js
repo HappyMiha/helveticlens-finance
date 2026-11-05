@@ -418,11 +418,17 @@
     var i = DATA.children.indexOf(top);
     return HUES[(i < 0 ? 0 : i) % HUES.length];
   }
+  // Top level: one hue per category. Deeper: neighbouring areas get different warm tones so they stay distinct.
+  function tone(it, k) { return path.length > 1 ? HUES[k % HUES.length] : hueFor(it.node); }
   function status(r) { return r.review ? 'review' : (r.pay ? 'confirmed' : 'unconfirmed'); }
 
   function render(refract) {
     var node = path[path.length - 1];
     var box = document.getElementById('treemap');
+    // Height from the width, so the map keeps a sensible shape on every screen (no CSS aspect-ratio quirks).
+    var wpx = box.clientWidth || box.parentNode.clientWidth;
+    var ratio = wpx < 600 ? 1.0 : 0.62;
+    box.style.height = Math.max(220, Math.min(wpx * ratio, window.innerHeight * 0.7)) + 'px';
     box.textContent = '';
     box.classList.remove('refract');
     if (refract) { void box.offsetWidth; box.classList.add('refract'); }
@@ -431,12 +437,12 @@
       b.type = 'button';
       b.className = 'tile' + (r.it.record ? ' leaf' : '');
       b.style.left = r.x + '%'; b.style.top = r.y + '%'; b.style.width = r.w + '%'; b.style.height = r.h + '%';
-      var top = path.length > 1 ? path[1] : r.it.node;
-      b.style.background = 'var(' + hueFor(top) + ')';
-      if (path.length > 1) b.style.filter = 'brightness(' + (1 - (k % 4) * 0.08) + ')';
+      b.style.background = 'var(' + tone(r.it, k) + ')';
       if (r.it.record) b.classList.add('st-' + status(r.it.record));
       var share = Math.round(r.it.value / sum(node) * 100);
-      if (r.w * r.h < 160) b.classList.add('compact');
+      // Size in real pixels decides: a narrow tile shows no text (its name is in the list below and the tooltip).
+      var pw = box.clientWidth * r.w / 100, ph = box.clientHeight * r.h / 100;
+      if (pw < 78 || ph < 44) b.classList.add('compact');
       b.title = r.it.label + ' · ' + chf(r.it.value) + ' · ' + share + ' %';
       if (r.it.record && selected === r.it.record.id) b.style.outline = '2px solid var(--text-primary)';
       var strong = document.createElement('strong'); strong.textContent = r.it.label;
@@ -458,6 +464,25 @@
       c.addEventListener('click', function () { if (i < path.length - 1) { path = path.slice(0, i + 1); selected = null; render(true); showEvidence(null); } });
       crumbs.appendChild(c);
     });
+    var list = document.getElementById('tm-list');
+    if (list) {
+      list.textContent = '';
+      items(node).forEach(function (it, k) {
+        var li = document.createElement('li');
+        var btn = document.createElement('button'); btn.type = 'button';
+        var sw = document.createElement('span'); sw.className = 'sw';
+        sw.style.background = 'var(' + tone(it, k) + ')';
+        var nm = document.createElement('span'); nm.className = 'nm'; nm.textContent = it.label;
+        var am = document.createElement('span'); am.className = 'am num';
+        am.textContent = chf(it.value) + ' · ' + Math.round(it.value / sum(node) * 100) + ' %';
+        btn.append(sw, nm, am);
+        btn.addEventListener('click', function () {
+          if (it.node) { path.push(it.node); selected = null; render(true); showEvidence(null); }
+          else { selected = it.record.id; render(false); showEvidence(it.record); }
+        });
+        li.appendChild(btn); list.appendChild(li);
+      });
+    }
     var n = 0; (function count(x) { n += (x.records || []).length; (x.children || []).forEach(count); })(node);
     document.getElementById('total').textContent = t('total') + ' ' + chf(sum(node)) + ' · ' + n + ' ' + t('records') + ' · ' + t('sample');
   }
@@ -523,5 +548,7 @@
   }
 
   document.getElementById('lang').addEventListener('change', function (e) { applyLang(e.target.value); });
+  var resizeTimer = null;
+  window.addEventListener('resize', function () { clearTimeout(resizeTimer); resizeTimer = setTimeout(function () { render(false); }, 150); });
   applyLang(initialLang());
 })();
