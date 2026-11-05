@@ -19,12 +19,15 @@ for pkg in ("pgserver", "pypdfium2", "pypdfium2_raw", "zxingcpp", "pillow_heif",
 # PostgreSQL must keep its directory layout ($libdir/postgresql/*.so, share/...), so ship pginstall as a tree.
 import pgserver as _pg
 
-_pginstall = Path(_pg.__file__).parent / "pginstall"
-datas = [x for x in datas if "pginstall" not in x[0]]
-binaries = [x for x in binaries if "pginstall" not in x[0]]
-for f in _pginstall.rglob("*"):
-    if f.is_file() and f.suffix != ".a" and "include" not in f.relative_to(_pginstall).parts:
-        datas.append((str(f), str(Path("pgserver/pginstall") / f.relative_to(_pginstall).parent)))
+# Its own shared libraries (incl. an older libpq) are shipped as plain files too, so they never replace
+# the libpq that psycopg links against.
+_pgdir = Path(_pg.__file__).parent
+datas = [x for x in datas if not Path(x[0]).is_relative_to(_pgdir)]
+binaries = [x for x in binaries if not Path(x[0]).is_relative_to(_pgdir)]
+for f in _pgdir.rglob("*"):
+    rel = f.relative_to(_pgdir)
+    if f.is_file() and f.suffix not in (".a", ".pyc") and "include" not in rel.parts and "__pycache__" not in rel.parts:
+        datas.append((str(f), str(Path("pgserver") / rel.parent)))
 datas += collect_data_files("financial_lens", includes=["**/*.sql", "assets/*"])
 hidden += ["financial_lens.selftest"]
 

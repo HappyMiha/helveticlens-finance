@@ -49,7 +49,17 @@ def dsn() -> str:
 
         root = data_dir() / "postgres"
         root.mkdir(parents=True, exist_ok=True)
-        _server = pgserver.get_server(str(root), cleanup_mode="stop")
+        try:
+            _server = pgserver.get_server(str(root), cleanup_mode="stop")
+        except Exception as exc:  # make the database's own message visible
+            import subprocess
+
+            cmd = getattr(exc, "cmd", None)
+            detail = ""
+            if cmd:
+                r = subprocess.run(cmd, capture_output=True, text=True)
+                detail = (r.stdout + r.stderr)[-1500:]
+            raise RuntimeError(f"Embedded PostgreSQL could not start: {exc}\n{detail}") from exc
         db = _server.psql("SELECT 1 FROM pg_database WHERE datname='financial_lens'")
         if "1 row" not in db:
             _server.psql("CREATE DATABASE financial_lens")

@@ -14,7 +14,9 @@ jobs:
       - uses: actions/checkout@v4
       - run: packaging/linux/build.sh
       - name: Self-test the AppImage
-        run: APPIMAGE_EXTRACT_AND_RUN=1 QT_QPA_PLATFORM=offscreen ./dist/FinancialLens-x86_64.AppImage --self-test selftest-linux.png
+        run: |
+          sudo apt-get update -q && sudo apt-get install -yq libegl1 libxkbcommon0 libfontconfig1  # present on any desktop
+          APPIMAGE_EXTRACT_AND_RUN=1 QT_QPA_PLATFORM=offscreen ./dist/FinancialLens-x86_64.AppImage --self-test selftest-linux.png
       - uses: actions/upload-artifact@v4
         with: {name: linux, path: "dist/FinancialLens-x86_64.AppImage\nselftest-linux.*"}
 
