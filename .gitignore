@@ -8,7 +8,7 @@ dist/
 deploy/cloudflared/*.json
 deploy/cloudflared/config.yml
 deploy/cloudflared/cert.pem
-data/
+/data/
 build/
 dist/
 mobile/build/
