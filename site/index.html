@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Financial Lens · Helvetic Lens</title>
-  <meta name="description" content="Evidence-first, offline-first finance for households, businesses and cooperatives. In development.">
+  <meta name="description" content="Evidence-first, offline-first finance for households, businesses and cooperatives. Open source.">
   <link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="assets/design-tokens.css">
   <link rel="stylesheet" href="assets/site.css">
@@ -28,7 +28,7 @@
 
   <main id="main">
     <div class="wrap hero">
-      <p class="status" data-i18n="status">In development · Phase 1 MVP</p>
+      <p class="status ok" data-i18n="status">Phases 1–4 implemented · open source</p>
       <p class="eyebrow" data-i18n="eyebrow">Financial intelligence</p>
       <h1 data-i18n="title">See where the money went. Inspect why.</h1>
       <p class="lead" data-i18n="lead">Financial Lens is a desktop application for household, business and cooperative finances. It reads receipts, invoices and bank statements, matches invoices with payments and keeps the original document behind every number.</p>
@@ -82,13 +82,14 @@
 
     <section aria-labelledby="h-road">
       <div class="wrap">
-        <h2 id="h-road" data-i18n="roadTitle">Phase 1 scope</h2>
+        <h2 id="h-road" data-i18n="roadTitle">What already works</h2>
         <ol class="road">
-          <li data-i18n="r1">Upload a receipt, recognise it and create a categorised record with the original kept as evidence.</li>
-          <li data-i18n="r2">Import a camt.053 bank statement and match payments automatically, with the reason for each match.</li>
-          <li data-i18n="r3">Show spending on a treemap and drill down to the original document.</li>
+          <li data-i18n="r1">Phase 1 — the full cycle: photo or PDF of an invoice → local OCR → record with category → original kept → bank statement → payment matched → treemap → drill down to every piece of evidence.</li>
+          <li data-i18n="r2">Phase 2 — partial and split payments, overpayments, refunds, payslips, duplicates, several currencies at recorded rates, CSV/XLSX bank exports, recurring and overdue payments, period comparisons and questions in plain language.</li>
+          <li data-i18n="r3">Phase 3 — personal, business and cooperative profiles: members, contributions and arrears, earmarked funds, cost allocation per building, roles, projects, budgets, reports and full export.</li>
+          <li data-i18n="r4">Phase 4 — three privacy levels with the network blocked in local-only mode, Swiss or external models only with your consent and with identifiers removed, encrypted backups, tamper-evident audit log, security self-check.</li>
         </ol>
-        <p class="meta" data-i18n="roadNote">Not yet available: downloads, accounts and bank connections. This page will say when they are.</p>
+        <p class="meta" data-i18n="roadNote">Not yet available: a ready-made installer, accounts and live bank connections. The source code and setup instructions are on GitHub.</p>
       </div>
     </section>
   </main>

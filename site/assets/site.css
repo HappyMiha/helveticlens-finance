@@ -121,3 +121,4 @@ ol.road li { margin-bottom: 10px; }
 footer { border-top: 1px solid var(--line); padding: var(--space-4) 0 var(--space-5); font-size: var(--type-meta); color: var(--text-secondary); }
 footer .wrap { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 12px; }
 .note { margin-top: 16px; }
+.status.ok::before { background: var(--success); }
