@@ -75,6 +75,8 @@ def periods(today: date) -> dict[str, tuple[date, date]]:
     prev_end = first - timedelta(days=1)
     q = (today.month - 1) // 3
     return {
+        "Today": (today, today),
+        "This week": (today - timedelta(days=today.weekday()), today),
         "This month": (first, today),
         "Last month": (prev_end.replace(day=1), prev_end),
         "This quarter": (date(today.year, 3 * q + 1, 1), today),
