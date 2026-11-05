@@ -608,8 +608,17 @@ class MainWindow(QMainWindow):
         os.environ.setdefault("FL_DSN", self.lens.dsn)
         os.environ.setdefault("FL_DATA", str(self.lens.files.root.parent))
         os.environ.setdefault("FL_ORG", next(o["name"] for o in self.lens.organizations() if o["id"] == self.lens.org))
+        # Windowed builds (Windows, macOS) have no console: sys.stdout is None, which breaks uvicorn's
+        # default logging and made "Pair phone" fail silently. Log to our file instead.
+        if sys.stdout is None or sys.stderr is None:
+            from .. import local_db
+
+            stream = open(local_db.data_dir() / "logs" / "server.log", "a", encoding="utf-8", buffering=1) \
+                if (local_db.data_dir() / "logs").exists() else open(os.devnull, "w")
+            sys.stdout = sys.stdout or stream
+            sys.stderr = sys.stderr or stream
         config = uvicorn.Config("financial_lens.api.app:app", host="0.0.0.0", port=port, log_level="warning",
-                                ssl_certfile=str(cert), ssl_keyfile=str(key))
+                                ssl_certfile=str(cert), ssl_keyfile=str(key), log_config=None)
         self._server = uvicorn.Server(config)
         threading.Thread(target=self._server.run, daemon=True).start()
         return port
