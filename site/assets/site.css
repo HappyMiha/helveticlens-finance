@@ -175,3 +175,4 @@ table.acc td.zero { color: var(--success); font-weight: 600; }
 .tm-list .am { color: var(--text-secondary); white-space: nowrap; }
 
 .treemap { aspect-ratio: auto; }
+.dl-version { margin-top: 14px; }
