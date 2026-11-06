@@ -63,7 +63,7 @@ jobs:
       - name: Installer
         shell: pwsh
         run: |
-          if (-not $env:FL_VERSION) { $env:FL_VERSION = (python -c "import re;print(re.search(r'__version__ = \"(.+?)\"', open('src/financial_lens/__init__.py').read()).group(1))") + "-test" }
+          if (-not $env:FL_VERSION) { $m = Select-String -Path src\financial_lens\__init__.py -Pattern '__version__ = "(.+?)"'; $env:FL_VERSION = $m.Matches[0].Groups[1].Value + "-test" }
           $env:FL_VERSION = $env:FL_VERSION.TrimStart("v")
           & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" packaging\windows\financial-lens.iss
       - uses: actions/upload-artifact@v4
