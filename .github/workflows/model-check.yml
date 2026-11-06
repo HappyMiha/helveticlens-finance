@@ -1,0 +1,46 @@
+name: Model check
+# Downloads a candidate local model and checks it runs with the pinned llama.cpp runtime.
+on:
+  workflow_dispatch:
+    inputs:
+      url:
+        description: "GGUF download URL (pinned to a commit)"
+        required: true
+      llama_tag:
+        description: "llama.cpp release tag"
+        required: true
+        default: "b12128"
+permissions:
+  contents: read
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - name: Free disk space
+        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL && df -h /
+      - name: Download model
+        env:
+          URL: ${{ inputs.url }}
+        run: |
+          curl -fL --retry 3 -o model.gguf "$URL"
+          echo "size=$(stat -c %s model.gguf)"
+          sha256sum model.gguf
+      - name: Download runtime
+        env:
+          TAG: ${{ inputs.llama_tag }}
+        run: |
+          curl -fL --retry 3 -o rt.tar.gz "https://github.com/ggml-org/llama.cpp/releases/download/$TAG/llama-$TAG-bin-ubuntu-x64.tar.gz"
+          mkdir rt && tar -xzf rt.tar.gz -C rt
+          find rt -name 'llama-server' -exec ln -s {} ./llama-server \;
+      - name: Run one prompt
+        run: |
+          RT=$(dirname "$(readlink -f llama-server)")
+          LD_LIBRARY_PATH="$RT" ./llama-server -m model.gguf -c 4096 -ngl 0 --host 127.0.0.1 --port 8099 --temp 0 > server.log 2>&1 &
+          for i in $(seq 1 180); do curl -sf http://127.0.0.1:8099/health && break; sleep 2; done
+          grep -iE "arch|chat template|error|n_ctx_train|model type" server.log | head -40
+          curl -sf http://127.0.0.1:8099/v1/chat/completions -H 'Content-Type: application/json' -d '{"messages":[{"role":"system","content":"Return JSON only."},{"role":"user","content":"Receipt text:\nMIGROS Basel\nBananen 2.40\nMilch 1.85\nTOTAL CHF 4.25\n\nReturn {\"merchant\":..., \"total\":..., \"items\":[...]}"}],"max_tokens":200}' | tee answer.json
+          test -s answer.json
+      - name: Server log
+        if: always()
+        run: tail -60 server.log || true
