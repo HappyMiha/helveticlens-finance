@@ -11,7 +11,7 @@ on:
 permissions:
   contents: write
 env:
-  FL_VERSION: ${{ github.ref_type == 'tag' && github.ref_name || inputs.release || '0.5.0-dev' }}
+  FL_VERSION: ${{ github.ref_type == 'tag' && github.ref_name || inputs.release || '' }}
   RELEASE_TAG: ${{ github.ref_type == 'tag' && github.ref_name || inputs.release }}
 jobs:
   linux:
@@ -62,7 +62,10 @@ jobs:
           & "$b\initdb.exe" -D "C:\pgtest3" --auth=trust -U postgres 2>&1 | Select-Object -Last 15
       - name: Installer
         shell: pwsh
-        run: '& "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" packaging\windows\financial-lens.iss'
+        run: |
+          if (-not $env:FL_VERSION) { $env:FL_VERSION = (python -c "import re;print(re.search(r'__version__ = \"(.+?)\"', open('src/financial_lens/__init__.py').read()).group(1))") + "-test" }
+          $env:FL_VERSION = $env:FL_VERSION.TrimStart("v")
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" packaging\windows\financial-lens.iss
       - uses: actions/upload-artifact@v4
         with: {name: windows, path: "dist/FinancialLens-Setup-x64.exe\nselftest-windows.*"}
 
@@ -117,9 +120,19 @@ jobs:
           gh release download --repo "${{ github.repository }}" --pattern FinancialLens-Android.apk --dir out/dist || true
           [ -f out/dist/FinancialLens-macOS-arm64.dmg ] || gh release download --repo "${{ github.repository }}" --pattern FinancialLens-macOS-arm64.dmg --dir out/dist || true
           ls -l out/dist
+      - uses: actions/checkout@v4
+        with: {path: src-tree}
+      - name: Release notes from the changelog
+        run: |
+          V="${RELEASE_TAG#v}"
+          { awk -v v="$V" '$0 ~ "^## "v"( |$)" {f=1; next} /^## / {f=0} f' src-tree/src/financial_lens/assets/changelog.md
+            echo
+            echo "Installers for Windows, Linux (AppImage) and macOS (Apple silicon); each passed its self-test. Not code-signed yet: Windows SmartScreen and macOS Gatekeeper ask for confirmation on first start."
+          } > notes.md
+          cat notes.md
       - env: {GH_TOKEN: "${{ github.token }}"}
         run: |
           APK=""; [ -f out/dist/FinancialLens-Android.apk ] && APK=out/dist/FinancialLens-Android.apk
           gh release create "$RELEASE_TAG" --repo "${{ github.repository }}" --target "${{ github.sha }}" --title "Financial Lens $RELEASE_TAG" \
-            --notes "Desktop installers for Linux (AppImage), Windows (installer) and macOS (Apple silicon). Each build passed its self-test (OCR, embedded PostgreSQL, matching, window). The builds are not code-signed yet: Windows SmartScreen and macOS Gatekeeper will ask for confirmation on first start." \
+            --notes-file notes.md \
             out/dist/FinancialLens-x86_64.AppImage out/dist/FinancialLens-Setup-x64.exe out/dist/FinancialLens-macOS-arm64.dmg $APK

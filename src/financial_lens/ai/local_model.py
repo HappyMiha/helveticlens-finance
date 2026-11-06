@@ -52,6 +52,9 @@ class ModelSpec:
     size: int
     sha256: str
     licence: str
+    ctx: int = 8192
+    role: str = "helper"          # helper: asked when the rules are unsure · analyst: reads every document
+    needs: str = "any computer (8 GB RAM); faster with a graphics card"
 
 
 APERTUS_8B = ModelSpec(
@@ -59,6 +62,17 @@ APERTUS_8B = ModelSpec(
     "https://huggingface.co/unsloth/Apertus-8B-Instruct-2509-GGUF/resolve/"
     "61c32783830424ac7a6d0fd80d4166e29dbaee06/Apertus-8B-Instruct-2509-Q4_K_M.gguf",
     5057885440, "87e7f0eb5a1d33e1a8ea4e7fdd2363764e0465061dd92962e0073aec31a7944d", "Apache-2.0")
+
+# Apertus 1.5 (Swiss AI, 2026), text part, 8-bit: reads whole documents for the analyst mode. Checked with
+# llama.cpp b12128 (model-check workflow). Its image input is not supported by llama.cpp yet.
+APERTUS_15 = ModelSpec(
+    "apertus-1.5-8b", "Apertus 1.5 8B (Swiss AI) · analyst", "apertus-v1.5-8b-text-q8_0.gguf",
+    "https://huggingface.co/andreasmartin/apertus-v1.5-8b-text-Q8_0-GGUF/resolve/"
+    "a39f7e04b541673750afecba224d3a3cf1f20862/apertus-v1.5-8b-text-q8_0.gguf",
+    8567121856, "dea904ad80cd725ec89962abae464477f5d8114d1f4377514f381f7dc2ed202d", "Apache-2.0",
+    ctx=16384, role="analyst", needs="a graphics card with 12 GB or more of video memory (16 GB recommended)")
+
+MODELS = {m.key: m for m in (APERTUS_8B, APERTUS_15)}
 
 
 class DownloadError(RuntimeError):
@@ -82,15 +96,64 @@ def server_binary() -> Optional[Path]:
     return hits[0] if hits else None
 
 
-def model_path(spec: ModelSpec = APERTUS_8B) -> Path:
-    return folder() / "models" / spec.file
+def selected() -> ModelSpec:
+    """The model the person chose (Settings → Local AI); the smaller one unless they picked the analyst."""
+    try:
+        return MODELS.get((folder() / "model.txt").read_text().strip(), APERTUS_8B)
+    except OSError:
+        return APERTUS_8B
 
 
-def status(spec: ModelSpec = APERTUS_8B) -> dict:
+def select(key: str) -> ModelSpec:
+    if key not in MODELS:
+        raise DownloadError(f"Unknown model {key}.")
+    folder().mkdir(parents=True, exist_ok=True)
+    (folder() / "model.txt").write_text(key)
+    return MODELS[key]
+
+
+def model_path(spec: Optional[ModelSpec] = None) -> Path:
+    return folder() / "models" / (spec or selected()).file
+
+
+def installed(spec: ModelSpec) -> bool:
     m = model_path(spec)
-    return {"model": spec.name, "licence": spec.licence, "size_bytes": spec.size,
-            "model_installed": m.exists() and m.with_suffix(".verified").exists(),
-            "runtime_installed": server_binary() is not None, "folder": str(folder())}
+    return m.exists() and m.with_suffix(".verified").exists()
+
+
+_gpu_cache: dict = {}
+
+
+def gpu_info() -> Optional[dict]:
+    """Best effort: the graphics card and its memory (NVIDIA through nvidia-smi). None if unknown."""
+    if "v" in _gpu_cache:
+        return _gpu_cache["v"]
+    info = None
+    exe = shutil.which("nvidia-smi")
+    if exe:
+        try:
+            flags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
+            out = subprocess.run([exe, "--query-gpu=name,memory.total", "--format=csv,noheader,nounits"],
+                                 capture_output=True, text=True, timeout=10, creationflags=flags).stdout.strip()
+            if out:
+                name, mem = [x.strip() for x in out.splitlines()[0].split(",")[:2]]
+                info = {"name": name, "vram_gb": round(int(mem) / 1024, 1)}
+        except Exception:
+            info = None
+    _gpu_cache["v"] = info
+    return info
+
+
+def status(spec: Optional[ModelSpec] = None) -> dict:
+    spec = spec or selected()
+    gpu = gpu_info()
+    return {"key": spec.key, "model": spec.name, "role": spec.role, "licence": spec.licence, "size_bytes": spec.size,
+            "model_installed": installed(spec), "runtime_installed": server_binary() is not None,
+            "folder": str(folder()), "gpu": gpu,
+            "models": [{"key": m.key, "name": m.name, "role": m.role, "size_bytes": m.size, "needs": m.needs,
+                        "installed": installed(m), "selected": m.key == spec.key,
+                        "fits": None if gpu is None else (m.role != "analyst" or gpu["vram_gb"] >= 11.5)}
+                       for m in MODELS.values()]}
 
 
 def _sha256(path: Path, progress: Optional[Callable[[str, float], None]] = None) -> str:
@@ -136,7 +199,8 @@ def _fetch(url: str, target: Path, size: int, sha: str, label: str,
 
 
 def install(progress: Optional[Callable[[str, float], None]] = None, cancel: Optional[threading.Event] = None,
-            spec: ModelSpec = APERTUS_8B) -> None:
+            spec: Optional[ModelSpec] = None) -> None:
+    spec = spec or selected()
     cancel = cancel or threading.Event()
     free = shutil.disk_usage(folder().parent if folder().parent.exists() else Path.home()).free
     if not model_path(spec).exists() and free < spec.size * 1.1:
@@ -177,6 +241,7 @@ def remove() -> None:
 
 _proc: Optional[subprocess.Popen] = None
 _url: Optional[str] = None
+_running_key: str = ""
 
 
 def _free_port() -> int:
@@ -185,18 +250,22 @@ def _free_port() -> int:
         return s.getsockname()[1]
 
 
-def start(spec: ModelSpec = APERTUS_8B, timeout: float = 180) -> str:
+def start(spec: Optional[ModelSpec] = None, timeout: float = 240) -> str:
     """Start llama-server on loopback; graphics card first, CPU if the GPU path fails. Returns the API URL."""
-    global _proc, _url
-    if _proc is not None and _proc.poll() is None and _url:
+    global _proc, _url, _running_key
+    spec = spec or selected()
+    if _proc is not None and _proc.poll() is None and _url and _running_key == spec.key:
         return _url
+    if _proc is not None:
+        stop()
     exe = server_binary()
     if exe is None or not model_path(spec).exists():
         raise DownloadError("The local model is not installed yet.")
     log = folder() / "server.log"
     for gpu_layers in ("99", "0"):
         port = _free_port()
-        args = [str(exe), "-m", str(model_path(spec)), "--alias", spec.key, "-c", "8192", "-ngl", gpu_layers,
+        args = [str(exe), "-m", str(model_path(spec)), "--alias", spec.key, "-c", str(spec.ctx if gpu_layers != "0" else 8192),
+                "-ngl", gpu_layers, "-np", "1",
                 "--host", "127.0.0.1", "--port", str(port), "--temp", "0"]
         flags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
         with open(log, "a") as fh:
@@ -206,7 +275,7 @@ def start(spec: ModelSpec = APERTUS_8B, timeout: float = 180) -> str:
         while time.time() - t0 < timeout and _proc.poll() is None:
             try:
                 urllib.request.urlopen(url + "/health", timeout=2).read()
-                _url = url + "/v1"
+                _url, _running_key = url + "/v1", spec.key
                 return _url
             except Exception:
                 time.sleep(1)

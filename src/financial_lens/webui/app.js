@@ -213,24 +213,168 @@
     api('GET', '/ui/transactions?' + q()).then(function (rows) {
       v.appendChild(card('Transactions · ' + rows.length, [rows.length ? table([['Date'], ['Kind'], ['Counterparty'], ['Category'], ['Amount', 'r'], ['Status']],
         rows.map(function (r) {
-          return el('tr', {}, [el('td', { text: r.op_date }), el('td', { text: r.kind }), el('td', { text: r.counterparty }), el('td', { text: r.category }),
+          return el('tr', {}, [el('td', { text: r.op_date }), el('td', { text: r.kind }),
+            el('td', {}, [r.source_document_id ? el('a', { href: '#/upload/' + r.source_document_id, title: 'Open its upload', text: r.counterparty || '—' }) : (r.counterparty || '—')]),
+            el('td', { text: r.category }),
             el('td', { class: 'r num', text: chf(r.amount) }), el('td', {}, [status(r.verification)])]);
         })) : el('p', { class: 'empty', text: 'No records in this period.' })]));
     }).catch(function (e) { toast(e.message); });
   }
 
+  var TYPE = { receipt: 'Receipt', invoice: 'Invoice', bank_statement: 'Bank statement', payslip: 'Payslip', unknown: 'Not recognised' };
   function renderDocuments() {
     var v = clear(view());
     api('GET', '/documents').then(function (docs) {
-      v.appendChild(card('Documents · ' + docs.length, [docs.length ? table([['Received'], ['File'], ['Type'], ['Status'], ['Folder'], ['Records', 'r'], ['', 'r']],
+      v.appendChild(card('Uploads · ' + docs.length, [docs.length ? table([['Received'], ['File'], ['Type'], ['Status'], ['Records', 'r'], ['', 'r']],
         docs.map(function (d) {
-          return el('tr', {}, [el('td', { text: String(d.received_at).slice(0, 16).replace('T', ' ') }),
-            el('td', {}, [el('a', { href: '/documents/' + d.id + '/original', target: '_blank', rel: 'noopener', text: d.filename })]),
-            el('td', { text: d.doc_type }), el('td', { text: d.processing_status }), el('td', { class: 'muted', text: d.folder || '' }),
+          var open = function () { location.hash = '#/upload/' + d.id; };
+          return el('tr', { class: 'click', onclick: open }, [el('td', { text: String(d.received_at).slice(0, 16).replace('T', ' ') }),
+            el('td', {}, [el('a', { href: '#/upload/' + d.id, text: d.filename })]),
+            el('td', { text: TYPE[d.doc_type] || d.doc_type }), el('td', { text: d.processing_status.replace('_', ' ') }),
             el('td', { class: 'r', text: String(d.operations) }),
-            el('td', { class: 'r' }, [d.doc_type === 'bank_statement' ? null : rereadButton(d.id, renderDocuments)])]);
-        })) : el('p', { class: 'empty', text: 'No documents yet. Drop files anywhere on this page.' })]));
+            el('td', { class: 'r' }, [el('a', { class: 'btn small', href: '#/upload/' + d.id, text: 'Open' })])]);
+        })) : el('p', { class: 'empty', text: 'No uploads yet. Drop files anywhere on this page.' })]));
     }).catch(function (e) { toast(e.message); });
+  }
+
+  var CATS = null;
+  function categoryPaths() {
+    if (CATS) return Promise.resolve(CATS);
+    return api('GET', '/categories').then(function (cs) {
+      CATS = cs.filter(function (c) { return !c.archived; }).map(function (c) { return c.path.join(' / '); }); return CATS;
+    });
+  }
+  function catSelect(current) {
+    var s = el('select', { 'aria-label': 'Category' });
+    (CATS || []).forEach(function (p) { var o = el('option', { value: p, text: p }); if (p === current) o.selected = true; s.appendChild(o); });
+    if (current && (CATS || []).indexOf(current) < 0) s.insertBefore(el('option', { value: current, text: current, selected: 'selected' }), s.firstChild);
+    return s;
+  }
+
+  function renderUpload() {
+    var id = location.hash.split('/')[2], v = clear(view());
+    v.appendChild(el('p', { class: 'muted', text: 'Loading…' }));
+    Promise.all([api('GET', '/ui/uploads/' + id), categoryPaths()]).then(function (res) {
+      var d = res[0]; clear(v);
+      var src = '/documents/' + d.id + '/original';
+      var media = String(d.media_type || '');
+      var preview = media.indexOf('image/') === 0 ? el('img', { src: src, alt: d.filename, class: 'preview' })
+        : media === 'application/pdf' ? el('iframe', { src: src, title: d.filename, class: 'preview' })
+        : el('pre', { class: 'preview text', text: d.text || '(no preview for this file type)' });
+      var head = el('div', { class: 'up-head' }, [
+        el('a', { href: '#/documents', class: 'muted', text: '← Uploads' }),
+        el('h2', { text: d.filename }),
+        el('p', { class: 'muted', text: (TYPE[d.doc_type] || d.doc_type) + ' · added ' + String(d.received_at).slice(0, 16).replace('T', ' ') +
+          ' · ' + d.records.length + ' record(s) · ' + chf(Math.abs(d.total)) + ' · read by ' + (d.engines || []).join(', ') }),
+        el('div', { class: 'nag-actions' }, [
+          el('a', { class: 'btn small', href: src, target: '_blank', rel: 'noopener', text: 'Open file' }),
+          d.doc_type === 'bank_statement' ? null : rereadButton(d.id, renderUpload),
+          el('button', { class: 'btn small danger', text: 'Delete upload', onclick: function () {
+            if (!confirm('Delete “' + d.filename + '” and the ' + d.records.length + ' record(s) read from it? Records it was only attached to stay.')) return;
+            api('DELETE', '/ui/uploads/' + d.id).then(function (r) {
+              toast('Deleted. ' + r.deleted_records + ' record(s) removed.'); location.hash = '#/documents'; refreshInboxCount();
+            }).catch(function (e) { toast(e.message); });
+          } })])]);
+      var recBox = el('div', { class: 'recs' });
+      var drawRecords = function (records) {
+        clear(recBox);
+        if (!records.length) recBox.appendChild(el('p', { class: 'muted', text: 'Nothing was recorded from this file. Add a record below if something is missing.' }));
+        else records.forEach(function (r) { recBox.appendChild(recordRow(r, d)); });
+      };
+      drawRecords(d.records);
+      var reading = el('details', {}, [el('summary', { text: 'Everything read from the file' })]);
+      if (d.reading) reading.appendChild(readingView(d.reading));
+      if (d.analysis) reading.appendChild(analysisView(d.analysis));
+      reading.appendChild(el('h4', { text: 'Text' }));
+      reading.appendChild(el('pre', { class: 'mono pre', text: d.text || '—' }));
+      v.appendChild(el('div', { class: 'grid up' }, [
+        card('', [preview]),
+        el('div', { class: 'grid' }, [card('', [head]), card('Records from this file', [recBox, addRecordForm(d)]), card('', [reading])])]));
+    }).catch(function (e) { clear(v).appendChild(el('p', { class: 'empty', text: e.message })); });
+  }
+
+  function recordRow(r, d) {
+    var path = (r.category_path || []).join(' / ');
+    var attached = r.source_document_id !== d.id;
+    var body = el('div', { class: 'rec-edit', hidden: 'hidden' });
+    var view = el('div', { class: 'rec-view' }, [
+      el('div', { class: 'rec-main' }, [
+        el('span', { class: 'muted num', text: r.op_date }),
+        el('strong', { text: r.counterparty || r.kind }),
+        el('span', { class: 'chip', text: path }),
+        (r.tags || []).length ? el('span', { class: 'muted small', text: '# ' + r.tags.join(', ') }) : null,
+        el('span', { class: 'grow' }),
+        el('span', { class: 'num rec-amt', text: chf(r.amount) })]),
+      el('div', { class: 'rec-sub' }, [status(r.verification), ' ',
+        el('span', { class: 'muted small', text: [r.kind, attached ? 'from an earlier upload; this file is attached to it' : '', r.description || ''].filter(Boolean).join(' · ') }),
+        el('span', { class: 'grow' }),
+        el('button', { class: 'btn small', text: 'Edit', onclick: function () { body.hidden = !body.hidden; } }), ' ',
+        el('button', { class: 'btn small', text: 'Delete', 'aria-label': 'Delete this record', onclick: function () {
+          if (!confirm('Delete this record (' + (r.counterparty || r.kind) + ', ' + chf(Math.abs(r.amount)) + ')?')) return;
+          api('DELETE', '/ui/records/' + r.operation_id).then(function () { toast('Deleted.'); renderUpload(); refreshInboxCount(); })
+            .catch(function (e) { toast(e.message); });
+        } })])]);
+    var date = el('input', { type: 'date', value: r.op_date });
+    var who = el('input', { type: 'text', value: r.counterparty || '' });
+    var desc = el('input', { type: 'text', value: r.description || '' });
+    var cat = catSelect(path);
+    var tags = el('input', { type: 'text', value: (r.tags || []).join(', '), placeholder: 'e.g. holiday, family' });
+    var sign = Number(r.amount) < 0 ? -1 : 1;
+    var amt = el('input', { type: 'text', value: Math.abs(Number(r.amount)).toFixed(2), inputmode: 'decimal' });
+    body.appendChild(el('form', { class: 'form', onsubmit: function (e) {
+      e.preventDefault();
+      var changes = {}, a = Number(String(amt.value).replace(/[’' ]/g, '').replace(',', '.'));
+      if (isNaN(a)) { toast('The amount is not a number.'); return; }
+      if (date.value !== r.op_date) changes.op_date = date.value;
+      if (who.value !== (r.counterparty || '')) changes.counterparty = who.value;
+      if (desc.value !== (r.description || '')) changes.description = desc.value;
+      if (cat.value !== path) changes.category = cat.value.split(' / ');
+      if (Math.abs(a - Math.abs(Number(r.amount))) > 0.0001) changes.amount = (sign * a).toFixed(2);
+      changes.confirm = true;
+      var wantTags = tags.value.split(',').map(function (t) { return t.trim(); }).filter(Boolean);
+      api('POST', '/operations/' + r.operation_id + '/corrections', { changes: changes, reason: 'edited on the upload page' })
+        .then(function () { return api('PUT', '/ui/records/' + r.operation_id + '/tags', { tags: wantTags }); })
+        .then(function () { toast('Saved and confirmed.'); renderUpload(); refreshInboxCount(); })
+        .catch(function (x) { toast(x.message); });
+    } }, [field('Date', date), field('Counterparty', who), field('Amount (' + r.currency + (sign < 0 ? ', paid out' : '') + ')', amt),
+      field('Category', cat), field('Tags', tags), el('label', { class: 'wide' }, ['Description', desc]),
+      el('button', { class: 'btn primary', type: 'submit', text: 'Save and confirm' })]));
+    return el('div', { class: 'rec' }, [view, body]);
+  }
+
+  function addRecordForm(d) {
+    var kind = el('select', { 'aria-label': 'Kind' }, [['receipt', 'Purchase (receipt)'], ['invoice', 'Bill (invoice)'], ['expense', 'Other expense'], ['income', 'Income']].map(function (k) { return el('option', { value: k[0], text: k[1] }); }));
+    var date = el('input', { type: 'date', value: new Date().toISOString().slice(0, 10) }), who = el('input', { type: 'text', placeholder: 'e.g. Migros' });
+    var amt = el('input', { type: 'text', placeholder: '0.00' }), desc = el('input', { type: 'text', placeholder: 'optional' });
+    var cat = catSelect(''); cat.insertBefore(el('option', { value: '', text: 'Choose automatically', selected: 'selected' }), cat.firstChild);
+    var form = el('form', { class: 'form', onsubmit: function (e) {
+      e.preventDefault();
+      var a = String(amt.value).replace(/[’' ]/g, '').replace(',', '.');
+      if (!a || isNaN(Number(a))) { toast('Enter an amount.'); return; }
+      api('POST', '/ui/uploads/' + d.id + '/records', { kind: kind.value, amount: Number(a).toFixed(2), op_date: date.value, counterparty: who.value,
+        description: desc.value, category: cat.value ? cat.value.split(' / ') : null })
+        .then(function () { toast('Added.'); renderUpload(); }).catch(function (x) { toast(x.message); });
+    } }, [field('Kind', kind), field('Date', date), field('Counterparty', who), field('Amount (CHF)', amt), field('Description', desc), field('Category', cat),
+      el('button', { class: 'btn primary', type: 'submit', text: 'Add record' })]);
+    return el('details', { class: 'add' }, [el('summary', { text: '+ Add a record the reading missed' }), form]);
+  }
+
+  function readingView(rd) {
+    var box = el('div', {}, [el('h4', { text: 'Apertus analysis' + (rd.model ? ' · ' + rd.model : '') })]);
+    var dl = el('dl', { class: 'kv' });
+    [['Merchant', rd.merchant], ['Summary', rd.summary], ['Date', rd.date], ['Total', rd.total], ['VAT', rd.vat], ['Payment', rd.payment],
+      ['Category', rd.category], ['Checked', rd.check]].forEach(function (p) { if (p[1]) { dl.appendChild(el('dt', { text: p[0] })); dl.appendChild(el('dd', { text: String(p[1]) })); } });
+    box.appendChild(dl);
+    if ((rd.items || []).length) box.appendChild(table([['Item'], ['Qty', 'r'], ['Amount', 'r']], rd.items.map(function (i) {
+      return el('tr', {}, [el('td', { text: i.name || '' }), el('td', { class: 'r', text: i.qty == null ? '' : String(i.qty) }), el('td', { class: 'r num', text: i.amount == null ? '' : String(i.amount) })]);
+    })));
+    return box;
+  }
+  function analysisView(an) {
+    var box = el('div', {}, [el('h4', { text: 'Checks' })]);
+    (an.checks || []).forEach(function (c) { box.appendChild(el('p', { class: 'muted', text: (c.ok ? '✓ ' : '✗ ') + c.name + (c.detail ? ' — ' + c.detail : '') })); });
+    (an.problems || []).forEach(function (p) { box.appendChild(el('p', { class: 'muted', text: '⚠ ' + p })); });
+    return box;
   }
 
   function renderInbox() {
@@ -366,6 +510,12 @@
         }).catch(function (e) { toast(e.message); });
       } })]));
     v.appendChild(card('Security check', [sec]));
+    var about = el('div');
+    v.appendChild(card('About', [about]));
+    api('GET', '/ui/about').then(function (a) {
+      about.appendChild(el('p', { class: 'kpi', text: 'Financial Lens ' + a.version }));
+      about.appendChild(el('details', { open: 'open' }, [el('summary', { text: 'What’s new' }), markdown(a.changelog)]));
+    }).catch(function () {});
     var drawAI = function () {
       api('GET', '/ui/ai').then(function (s) {
         clear(ai);
@@ -393,9 +543,22 @@
             api('POST', '/ui/ai/toggle', { on: !on }).then(drawAI).catch(function (e) { toast(e.message); });
           } }));
         }
+        if ((s.models || []).length > 1 && !(s.progress && s.progress.running)) {
+          ai.appendChild(el('h4', { text: 'Model' }));
+          if (s.gpu) ai.appendChild(el('p', { class: 'muted', text: 'Graphics card: ' + s.gpu.name + ' · ' + s.gpu.vram_gb + ' GB video memory' }));
+          s.models.forEach(function (m) {
+            var pick = m.selected ? el('span', { class: 'st confirmed', text: m.installed ? '● in use' : '● chosen' }) : el('button', { class: 'btn small' + (m.role === 'analyst' && m.fits !== false ? ' primary' : ''),
+              text: m.installed ? 'Use this' : 'Download (' + (m.size_bytes / 1e9).toFixed(1) + ' GB) and use', onclick: function () {
+                if (m.fits === false && !confirm('This computer’s graphics card seems too small for ' + m.name + '. It will run, but slowly. Continue?')) return;
+                api('POST', '/ui/ai/install', { model: m.key }).then(function () { setTimeout(drawAI, 400); }).catch(function (e) { toast(e.message); });
+              } });
+            ai.appendChild(el('div', { class: 'model-row' }, [el('div', {}, [el('strong', { text: m.name }),
+              el('div', { class: 'muted small', text: (m.role === 'analyst' ? 'Reads every document as a whole: merchant, each item, VAT, total, category; the program checks its arithmetic. Needs ' : 'Helps when the rules are unsure. Runs on ') + m.needs + '.' })]), pick]));
+          });
+        }
         ai.appendChild(el('p', { class: 'muted', text: s.model + ' · ' + s.licence + ' · about ' + (s.size_bytes / 1e9).toFixed(1) + ' GB, runs on this computer only. ' +
           'When it is on, new documents are read with it where the rules are unsure; its reading counts only if the arithmetic reconciles. ' +
-          'Documents added before can be read again from Documents → Read again.' }));
+          'Documents added before can be read again from Uploads → Read again.' }));
       });
     };
     drawAI();
@@ -404,6 +567,43 @@
     }).catch(function (e) { clear(sec).appendChild(el('p', { class: 'muted', text: e.message })); });
   }
 
+
+  // ------------------------------------------------------------ version and what's new
+  var ABOUT = null;
+  function markdown(md) {
+    // the changelog ships with the app; rendered as text nodes (headings, bullets, **bold**)
+    var box = el('div', { class: 'md' }), ul = null;
+    var inline = function (line, node) {
+      line.split(/(\*\*[^*]+\*\*)/).forEach(function (part) {
+        if (/^\*\*[^*]+\*\*$/.test(part)) node.appendChild(el('strong', { text: part.slice(2, -2) }));
+        else if (part) node.appendChild(document.createTextNode(part));
+      });
+      return node;
+    };
+    md.split('\n').forEach(function (raw) {
+      var line = raw.replace(/\s+$/, '');
+      if (/^#\s/.test(line)) return;
+      if (/^##\s/.test(line)) { ul = null; box.appendChild(el('h4', { text: line.replace(/^##\s*/, '') })); return; }
+      if (/^- /.test(line)) { if (!ul) { ul = el('ul'); box.appendChild(ul); } ul.appendChild(inline(line.slice(2), el('li'))); return; }
+      if (/^\s+\S/.test(line) && ul && ul.lastChild) { ul.lastChild.appendChild(document.createTextNode(' ')); inline(line.trim(), ul.lastChild); return; }
+      if (line) { ul = null; box.appendChild(inline(line, el('p'))); }
+    });
+    return box;
+  }
+  function section(md, version) {
+    var parts = md.split(/^## /m), hit = parts.find(function (p) { return p.indexOf(version) === 0; });
+    return hit ? '## ' + hit : '';
+  }
+  function whatsNewOnce(a) {
+    var seen = null;
+    try { seen = localStorage.getItem('fl-seen-version'); } catch (e) { return; }
+    try { localStorage.setItem('fl-seen-version', a.version); } catch (e) { return; }
+    if (!seen || seen === a.version) return;  // first start ever, or nothing new
+    var notes = section(a.changelog, a.version); if (!notes) return;
+    var d = el('dialog', { class: 'nag', 'aria-labelledby': 'wn-title' }, [el('h2', { id: 'wn-title', text: 'What’s new in ' + a.version }), markdown(notes),
+      el('div', { class: 'nag-actions' }, [el('button', { class: 'btn primary', text: 'OK', onclick: function () { d.close(); d.remove(); } })])]);
+    document.body.appendChild(d); if (d.showModal) d.showModal();
+  }
 
   // ------------------------------------------------------------ corporate edition
   var ME = null;
@@ -604,9 +804,10 @@
       route(); refreshInboxCount();
       var old = document.getElementById('upload-result'); if (old) old.remove();
       var rows = res.map(function (r, i) {
-        var what = r.duplicate_of ? 'Already here (added earlier)' : r.operation_ids.length ? r.operation_ids.length + ' record(s): ' + r.doc_type : 'Waits for review: ' + r.doc_type;
+        var what = r.duplicate_of && !r.operation_ids.length ? 'Already here (added earlier)' : r.duplicate_of ? 'Already recorded; file attached' : r.operation_ids.length ? r.operation_ids.length + ' record(s): ' + r.doc_type : 'Waits for review: ' + r.doc_type;
         return el('tr', {}, [el('td', { text: names[i] || '' }), el('td', { text: what }), el('td', { class: 'muted', text: (r.messages || []).join(' ') }),
-          el('td', { class: 'r' }, [r.duplicate_of || !r.operation_ids.length ? rereadButton(r.document_id, function () { route(); }) : null])]);
+          el('td', { class: 'r' }, [el('a', { class: 'btn small', href: '#/upload/' + r.document_id, text: 'Open' }), ' ',
+            !r.operation_ids.length ? rereadButton(r.document_id, function () { route(); }) : null])]);
       });
       var box = card('Just added', [table([['File'], ['Result'], ['Note'], ['', 'r']], rows),
         el('p', { class: 'muted', text: 'A file that is already here is not added twice. “Read again” reads it once more, with the local AI if it is on.' }),
@@ -617,14 +818,14 @@
   }
 
   // ------------------------------------------------------------ routing
-  var PAGES = { overview: renderOverview, inbox: renderInbox, documents: renderDocuments, transactions: renderTransactions,
+  var PAGES = { overview: renderOverview, inbox: renderInbox, documents: renderDocuments, upload: renderUpload, transactions: renderTransactions,
     analytics: renderAnalytics, ask: renderAsk, phone: renderPhone, settings: renderSettings,
     team: renderTeam, audit: renderAudit, license: renderLicense, account: renderAccount };
   function route() {
     var page = (location.hash.replace(/^#\/?/, '').split('/')[0]) || 'overview';
     if (!PAGES[page]) page = 'overview';
     if (ME && ME.role === 'member' && page !== 'account') { location.hash = '#/account'; return; }
-    document.querySelectorAll('[data-nav]').forEach(function (a) { a.classList.toggle('on', a.getAttribute('data-nav') === page); });
+    document.querySelectorAll('[data-nav]').forEach(function (a) { a.classList.toggle('on', a.getAttribute('data-nav') === (page === 'upload' ? 'documents' : page)); });
     PAGES[page]();
   }
   function refreshInboxCount() {
@@ -661,6 +862,9 @@
       var org = (me.organizations || []).find(function (o) { return o.id === me.org; });
       var foot = clear(document.getElementById('side-foot'));
       foot.appendChild(document.createTextNode((org ? org.name : '') + ' · ' + { local_only: 'L2 local only', swiss_hosted: 'L1 Swiss', cloud_ai: 'L0' }[me.privacy]));
+      foot.appendChild(el('br'));
+      var ver = el('a', { href: '#/settings', class: 'ver', text: 'Version …' }); foot.appendChild(ver);
+      api('GET', '/ui/about').then(function (a) { ABOUT = a; ver.textContent = 'Version ' + a.version + ' · What’s new'; whatsNewOnce(a); }).catch(function () {});
       if (me.edition === 'corporate') {
         ME = me.user;
         var admin = ME.role === 'owner' || ME.role === 'admin';

@@ -56,7 +56,8 @@ class LensPool:
         fl = FinancialLens(first.dsn, first.files.root.parent, actor=first.actor)
         fl.org = first.org
         if first.ai is not None and first.ai.routes.get("understand"):
-            fl.use_local_model(first.ai.routes["understand"][0].base_url)
+            fl.use_local_model(first.ai.routes["understand"][0].base_url, first.ai_model_key or "apertus-8b",
+                               first.ai_model_name + " (local)")
         return fl
 
     def get(self) -> FinancialLens:
@@ -119,7 +120,9 @@ def _period(start: Optional[date], end: Optional[date]) -> tuple[date, date]:
 
 @app.get("/health")
 def health() -> JSONResponse:
-    return JSONResponse({"status": "ok"}, headers={"X-Financial-Lens": "1"})
+    from .. import __version__
+
+    return JSONResponse({"status": "ok", "version": __version__}, headers={"X-Financial-Lens": "1"})
 
 
 @app.post("/documents")
@@ -486,8 +489,10 @@ def ui_transactions(start: Optional[date] = None, end: Optional[date] = None, fl
     fl.authorize("read")
     s, e = _period(start, end)
     rows = fl.db.execute(
-        "SELECT operation_id, kind, op_date, counterparty, category_id, amount, currency, verification FROM operations_current "
-        "WHERE organization_id=%s AND op_date BETWEEN %s AND %s ORDER BY op_date DESC, operation_id", (fl.org, s, e)).fetchall()
+        "SELECT operation_id, kind, op_date, counterparty, category_id, amount, currency, verification, source_document_id FROM operations_current c "
+        "WHERE organization_id=%s AND op_date BETWEEN %s AND %s AND NOT EXISTS (SELECT 1 FROM links dup WHERE "
+        "dup.from_operation_id=c.operation_id AND dup.link_type='duplicate' AND dup.status='confirmed') "
+        "ORDER BY op_date DESC, operation_id", (fl.org, s, e)).fetchall()
     return [{**fl._json(r), "category": " / ".join(fl.category_path(r["category_id"]))} for r in rows]
 
 
@@ -505,3 +510,67 @@ def ui_inbox(fl: FinancialLens = Depends(lens)) -> dict:
         "ORDER BY op_date DESC LIMIT 200", (fl.org,)).fetchall()
     docs = [d for d in fl.documents() if d["processing_status"] in ("needs_review", "failed")]
     return {"links": [fl._json(r) for r in proposed], "review": [fl._json(r) for r in review], "documents": docs}
+
+
+# ------------------------------------------------------------------ uploads and records
+@app.get("/ui/uploads/{document_id}")
+def ui_upload(document_id: str, fl: FinancialLens = Depends(lens)) -> dict:
+    try:
+        return fl.upload_detail(document_id)
+    except LookupError as exc:
+        raise HTTPException(404, str(exc))
+
+
+@app.delete("/ui/uploads/{document_id}")
+def ui_delete_upload(document_id: str, fl: FinancialLens = Depends(lens)) -> dict:
+    try:
+        return fl.delete_document(document_id)
+    except LookupError as exc:
+        raise HTTPException(404, str(exc))
+
+
+@app.post("/ui/uploads/{document_id}/records")
+def ui_add_record(document_id: str, body: Manual, fl: FinancialLens = Depends(lens)) -> dict:
+    try:
+        op = fl.add_to_upload(document_id, body.kind, body.amount, body.currency, body.op_date, body.counterparty,
+                              tuple(body.category) if body.category else None, body.description)
+    except LookupError as exc:
+        raise HTTPException(404, str(exc))
+    return {"id": op}
+
+
+@app.delete("/ui/records/{op_id}")
+def ui_delete_record(op_id: str, fl: FinancialLens = Depends(lens)) -> dict:
+    try:
+        fl.delete_operation(op_id)
+    except LookupError as exc:
+        raise HTTPException(404, str(exc))
+    return {"status": "deleted"}
+
+
+class Tags(BaseModel):
+    tags: list[str]
+
+
+@app.put("/ui/records/{op_id}/tags")
+def ui_set_tags(op_id: str, body: Tags, fl: FinancialLens = Depends(lens)) -> dict:
+    want = {t.strip() for t in body.tags if t.strip()}
+    have = set(fl.tags(op_id))
+    for t in sorted(want - have):
+        fl.tag(op_id, t[:60])
+    for t in sorted(have - want):
+        fl.untag(op_id, t)
+    return {"tags": fl.tags(op_id)}
+
+
+@app.get("/ui/about")
+def ui_about() -> dict:
+    from importlib import resources
+
+    from .. import __version__
+
+    try:
+        notes = resources.files("financial_lens").joinpath("assets/changelog.md").read_text(encoding="utf-8")
+    except (FileNotFoundError, OSError):
+        notes = ""
+    return {"version": __version__, "changelog": notes}

@@ -9,6 +9,7 @@ from __future__ import annotations
 import hashlib
 import json
 import mimetypes
+import os
 import re
 import uuid
 from dataclasses import dataclass
@@ -23,7 +24,7 @@ import psycopg
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
-from .classify.rules import DEFAULT_TREE, classify
+from .classify.rules import DEFAULT_TREE, Suggestion, classify
 from .domain.money import MINOR_UNITS
 from .extract import fields as fx
 from .extract import understand
@@ -219,7 +220,8 @@ class FinancialLens:
         """Attach a model running on this machine (llama.cpp / Ollama, OpenAI-compatible API)."""
         from .ai.providers import OpenAICompatible, Orchestrator
 
-        p = OpenAICompatible(name, base_url, model, "local", timeout=300)
+        p = OpenAICompatible(name, base_url, model, "local", timeout=600 if model.startswith("apertus-1.5") else 300)
+        self.ai_model_key, self.ai_model_name = model, name.replace(" (local)", "")
         self.attach_ai(Orchestrator(routes={t: [p] for t in ("understand", "extract", "classify", "parse_question")}))
 
     def attach_ai(self, orchestrator) -> None:
@@ -237,6 +239,30 @@ class FinancialLens:
         orchestrator.log = log
         orchestrator.document_privacy = doc_privacy
         self.ai = orchestrator
+
+    ai_model_name = "Apertus"
+    ai_model_key = ""
+
+    def analyst_on(self) -> bool:
+        """Apertus 1.5 reads every document as a whole (strong computers); the smaller model only helps when unsure."""
+        if not self.ai_assist():
+            return False
+        return self.ai_model_key.startswith("apertus-1.5") or os.environ.get("FL_ANALYST") == "1"
+
+    def _apply_reading(self, ex, r: dict):
+        """Take from the model's reading only what the program could check against the document."""
+        if r.get("merchant") and r["merchant_printed"] and (ex.counterparty is None or ex.counterparty.confidence < 0.9):
+            ex.counterparty = fx.Field(r["merchant"], None, r["merchant"], 0.9, "model-checked")
+        if r.get("total") and r["total_printed"] and ex.amount is None:
+            ex.amount = fx.Field(abs(Decimal(r["total"])), None, r["total"], 0.85 if r["items_match"] else 0.75,
+                                 "model-checked")
+        if ex.doc_date is None and r.get("date"):
+            ex.doc_date = fx.Field(date.fromisoformat(r["date"]), None, "", 0.6, "ai")
+        if r.get("summary"):
+            ex.description = fx.Field(r["summary"], None, "", 0.7, "model-summary")
+        if (ex.doc_type is None or str(ex.doc_type.value) == "unknown") and r.get("doc_type") in ("invoice", "receipt"):
+            ex.doc_type = fx.Field(r["doc_type"], None, "", 0.7, "model-checked")
+        return ex
 
     def _ai_fill(self, ex, text, doc: str):
         """Ask a model for fields the rules could not find. Accepted only if the model quotes
@@ -389,8 +415,8 @@ class FinancialLens:
             "INSERT INTO operation_revisions (id, operation_id, revision, amount, currency, fx_rate, fx_source, op_date, "
             "due_date, counterparty, description, category_id, project_id, account_id, reference, bank_reference, period, "
             "verification, verification_reason, source_document_id, method, agent, confidence, provenance, change_reason, "
-            "object_id, member_id, fund_id, scope, expense_class) "
-            "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+            "object_id, member_id, fund_id, scope, expense_class, deleted) "
+            "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
             (rid, op, number, amount, cur, merged.get("fx_rate"), merged.get("fx_source"), merged["op_date"],
              merged.get("due_date"), merged.get("counterparty") or "", merged.get("description") or "",
              merged.get("category_id"), merged.get("project_id"), merged.get("account_id"), merged.get("reference"),
@@ -398,7 +424,7 @@ class FinancialLens:
              merged.get("verification_reason") or "", merged.get("source_document_id"), merged["method"],
              merged["agent"], merged.get("confidence"), Jsonb(merged.get("provenance") or {}), change_reason,
              merged.get("object_id"), merged.get("member_id"), merged.get("fund_id"), merged.get("scope"),
-             merged.get("expense_class")))
+             merged.get("expense_class"), bool(values.get("deleted", False))))
         self._audit("revise" if not first else "create", "operation", op,
                     {"revision": number, "reason": change_reason,
                      "changed": sorted(k for k in values if k != "provenance")}, actor=merged["agent"])
@@ -464,8 +490,17 @@ class FinancialLens:
         self.authorize("write")
         media_type = media_type or _sniff(data, filename)
         sha, key = self.files.put(data)
-        existing = self.db.execute("SELECT id, doc_type FROM documents WHERE organization_id=%s AND sha256=%s",
+        existing = self.db.execute("SELECT id, doc_type, deleted_at FROM documents WHERE organization_id=%s AND sha256=%s",
                                    (self.org, sha)).fetchone()
+        if existing and existing["deleted_at"] is not None:
+            # uploaded again after it was deleted: read it afresh under the same identity
+            doc = str(existing["id"])
+            with self.db.transaction():
+                self.db.execute("UPDATE documents SET deleted_at=NULL, filename=%s, media_type=%s, processing_status="
+                                "'processing', doc_type='unknown', folder=NULL, received_at=now(), received_by=%s "
+                                "WHERE id=%s", (filename, media_type, self.actor, doc))
+                self._audit("restore_original", "document", doc, {"sha256": sha, "filename": filename})
+            return self._read_new(doc, data, filename, media_type)
         if existing:
             with self.db.transaction():
                 self._audit("duplicate_upload", "document", str(existing["id"]), {"filename": filename})
@@ -478,6 +513,9 @@ class FinancialLens:
                 "privacy, processing_status, received_by) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,'processing',%s)",
                 (doc, self.org, sha, filename, media_type, len(data), key, privacy, self.actor))
             self._audit("store_original", "document", doc, {"sha256": sha, "filename": filename, "bytes": len(data)})
+        return self._read_new(doc, data, filename, media_type)
+
+    def _read_new(self, doc: str, data: bytes, filename: str, media_type: str) -> IngestResult:
         try:
             if media_type in ("application/xml", "text/xml") and b"camt.05" in data[:2000]:
                 result = self._import_camt(doc, data)
@@ -500,7 +538,8 @@ class FinancialLens:
         reading are kept in the history but replaced: linked as confirmed duplicates of the new ones, so they
         no longer count. Refused once a record from this document was confirmed or matched to a payment."""
         self.authorize("write")
-        d = self.db.execute("SELECT * FROM documents WHERE id=%s AND organization_id=%s", (document_id, self.org)).fetchone()
+        d = self.db.execute("SELECT * FROM documents WHERE id=%s AND organization_id=%s AND deleted_at IS NULL",
+                            (document_id, self.org)).fetchone()
         if d is None:
             raise LookupError("Document not found.")
         if d["doc_type"] == "bank_statement" or d["media_type"] in ("application/xml", "text/xml", "text/csv") \
@@ -574,9 +613,22 @@ class FinancialLens:
                 ex.amount = fx.Field(total["value"], total["line"], total["quote"], 0.95 if supported else 0.6,
                                      "arithmetic" if supported else "label")
         messages = []
+        reading = None
+        if self.analyst_on():
+            from .ai import analyst
+
+            cats = [" / ".join(c["path"]) for c in self.categories() if c["kind"] == "expense" and not c["archived"]]
+            reading = analyst.read(self.ai, text, cats, doc, self.ai_model_name)
+            if reading:
+                ex = self._apply_reading(ex, reading)
         with self.db.transaction():
             self.db.execute("INSERT INTO extractions (id, document_id, engine, text, fields) VALUES (%s,%s,%s,%s,%s)",
-                            (_uuid(), doc, text.engine, text.text, Jsonb({**ex.to_json(), "analysis": an.to_json()})))
+                            (_uuid(), doc, text.engine, text.text,
+                             Jsonb({**ex.to_json(), "analysis": an.to_json(), "reading": reading})))
+            if reading:
+                self._ai_log("understand", "analyst:" + reading["model"], "local",
+                             f"Read the whole document: {reading.get('merchant') or '?'} · {reading.get('total') or '?'} · "
+                             f"{len(reading['items'])} item(s)", {"check": reading["check"]}, document_id=doc)
             self._ai_log("ocr", text.engine, "local", f"Recognised {len(text.lines)} lines"
                          + (f", mean confidence {text.mean_confidence:.0%}" if text.mean_confidence else ""),
                          {"qr_codes": len(text.qr_payloads)}, document_id=doc)
@@ -593,6 +645,9 @@ class FinancialLens:
                 desc = str(ex.description.value) if ex.description else ""
                 sug = classify(cp, desc, self._rules(), ai=self.ai,
                                categories=[c["path"] for c in self.categories() if c["kind"] == "expense"])
+                if reading and reading.get("category") and sug.method not in ("user-rule", "learned-rule"):
+                    sug = Suggestion(tuple(reading["category"].split(" / ")), 0.75, "ai",
+                                     f"{reading['model']} read the document" + (f": {reading['summary']}" if reading.get("summary") else ""))
                 if sug.method == "ai":
                     self._ai_log("classify", "model", "local", f"Suggested {' / '.join(sug.path)}",
                                  {"confidence": sug.confidence, "reason": sug.reason}, document_id=doc)
@@ -635,6 +690,22 @@ class FinancialLens:
                 prov = {name: {**f.to_json(), "document_id": doc} for name, f in ex.fields().items()}
                 prov["category"] = {"method": sug.method, "reason": sug.reason, "confidence": sug.confidence}
                 op_date = ex.doc_date.value
+                same = self._already_recorded(kind, Decimal(str(ex.amount.value)),
+                                              str(ex.currency.value) if ex.currency else BASE, op_date, cp, doc)
+                if same is not None:
+                    # the same receipt or invoice again (another photo, a scan of the paper, a forwarded PDF):
+                    # attach this file to the record that exists instead of counting it twice
+                    self.db.execute("INSERT INTO document_operations VALUES (%s,%s,'attachment') ON CONFLICT DO NOTHING",
+                                    (doc, same["operation_id"]))
+                    self._audit("attach_duplicate", "document", doc, {"operation": str(same["operation_id"])})
+                    messages.append(f"Already recorded: {same['counterparty'] or kind} {same['currency']} "
+                                    f"{abs(same['amount']):.2f} on {same['op_date']:%d.%m.%Y}. This file was attached "
+                                    f"to that record instead of creating a second one.")
+                    self.db.execute("UPDATE documents SET doc_type=%s, doc_type_confidence=%s, processing_status='processed', "
+                                    "folder=%s WHERE id=%s", (doc_type, ex.doc_type.confidence,
+                                                              self._folder(doc_type, op_date, sug.path, False), doc))
+                    return IngestResult(doc, doc_type, str(same["source_document_id"] or "") or None,
+                                        [str(same["operation_id"])], [], messages)
                 op = self._new_operation(kind, {
                     "amount": Decimal(str(ex.amount.value)), "currency": str(ex.currency.value) if ex.currency else BASE,
                     "op_date": op_date, "due_date": ex.due_date.value if ex.due_date else None,
@@ -798,6 +869,12 @@ class FinancialLens:
                         (self.org, p.bank_reference)).fetchone():
                     skipped += 1
                     continue
+                same = self._same_bank_entry(p, account, doc)
+                if same is not None:  # the same booking from an overlapping statement or another export
+                    self.db.execute("INSERT INTO document_operations VALUES (%s,%s,'statement') ON CONFLICT DO NOTHING",
+                                    (doc, same))
+                    skipped += 1
+                    continue
                 booking = hints.get(p.bank_reference)
                 own = self._is_own_transfer(p.counterparty, p.remittance or "") or bool(booking and booking.own_account)
                 if own:
@@ -926,6 +1003,19 @@ class FinancialLens:
                 self._audit("tidy", "bank_entries", self.org, {"changed": changed, "version": self.BANK_TEXT_VERSION},
                             actor="analyst:booking-text")
         return changed
+
+    def _same_bank_entry(self, p, account: Optional[str], doc: str) -> Optional[str]:
+        rows = self.db.execute(
+            "SELECT operation_id, counterparty, description, bank_reference FROM operations_current WHERE organization_id=%s "
+            "AND kind IN ('payment','transfer') AND amount=%s AND currency=%s AND op_date=%s "
+            "AND account_id IS NOT DISTINCT FROM %s AND source_document_id IS DISTINCT FROM %s",
+            (self.org, p.amount.amount, p.amount.currency, p.booked_on, account, doc)).fetchall()
+        mine = " ".join(filter(None, [p.counterparty, p.remittance or ""]))
+        for r in rows:
+            theirs = " ".join(filter(None, [r["counterparty"], r["description"]]))
+            if _similar(r["counterparty"] or "", p.counterparty or "") >= 0.6 or _similar(theirs, mine) >= 0.6:
+                return str(r["operation_id"])
+        return None
 
     def _is_own_transfer(self, counterparty: str, remittance: str) -> bool:
         text = (counterparty + " " + remittance).casefold()
@@ -1175,6 +1265,26 @@ class FinancialLens:
             self.reconcile()
 
     # ------------------------------------------------------------- duplicates
+    def _already_recorded(self, kind: str, amount: Decimal, currency: str, op_date, counterparty: str,
+                          doc: str) -> Optional[dict]:
+        """A record from another upload with the same amount and date and (nearly) the same counterparty."""
+        if op_date is None:
+            return None
+        rows = self.db.execute(
+            "SELECT * FROM operations_current c WHERE organization_id=%s AND kind = ANY(%s) AND amount=%s AND currency=%s "
+            "AND op_date BETWEEN %s AND %s AND source_document_id IS NOT NULL AND source_document_id <> %s "
+            "AND NOT EXISTS (SELECT 1 FROM links dup WHERE dup.from_operation_id=c.operation_id AND "
+            "dup.link_type='duplicate' AND dup.status='confirmed')",
+            (self.org, [kind] if kind in ("payslip",) else list(SPEND_KINDS), amount, currency,
+             op_date - timedelta(days=1), op_date + timedelta(days=1), doc)).fetchall()
+        for r in rows:
+            if not counterparty or not r["counterparty"]:
+                continue  # without a name, amount and date alone are not enough: proposed as a duplicate instead
+            sim = _similar(r["counterparty"], counterparty)
+            if sim >= 0.8 and (r["op_date"] == op_date or sim >= 0.9):
+                return r
+        return None
+
     def _find_duplicates(self, op: str) -> None:
         """Same amount, date and counterparty from a different document: propose, never drop (§3)."""
         e = self.db.execute("SELECT * FROM operations_current WHERE operation_id=%s", (op,)).fetchone()
@@ -1359,7 +1469,7 @@ class FinancialLens:
             "ORDER BY coalesce(due_date, op_date)", (self.org,)).fetchall()
         recent = self.db.execute(
             "SELECT id, filename, doc_type, processing_status, folder, received_at FROM documents "
-            "WHERE organization_id=%s ORDER BY received_at DESC LIMIT 10", (self.org,)).fetchall()
+            "WHERE organization_id=%s AND deleted_at IS NULL ORDER BY received_at DESC LIMIT 10", (self.org,)).fetchall()
         bank = self.db.execute(
             "SELECT coalesce(sum(amount),0) AS s FROM operations_current WHERE organization_id=%s "
             "AND kind IN ('payment','transfer') AND currency=%s AND op_date BETWEEN %s AND %s",
@@ -1422,9 +1532,98 @@ class FinancialLens:
     def documents(self) -> list[dict]:
         self.authorize("read")
         rows = self.db.execute(
-            "SELECT d.*, (SELECT count(*) FROM document_operations o WHERE o.document_id=d.id) AS operations "
-            "FROM documents d WHERE organization_id=%s ORDER BY received_at DESC", (self.org,)).fetchall()
+            "SELECT d.*, (SELECT count(*) FROM document_operations o JOIN operations_current c ON "
+            "c.operation_id=o.operation_id WHERE o.document_id=d.id AND NOT EXISTS (SELECT 1 FROM links dup WHERE "
+            "dup.from_operation_id=c.operation_id AND dup.link_type='duplicate' AND dup.status='confirmed')) AS operations "
+            "FROM documents d WHERE organization_id=%s AND deleted_at IS NULL ORDER BY received_at DESC",
+            (self.org,)).fetchall()
         return [self._json(r) for r in rows]
+
+    # ------------------------------------------------------------ uploads
+    def upload_detail(self, document_id: str) -> dict:
+        """One upload: the document, what was read from it and every record it produced or is attached to."""
+        self.authorize("read")
+        d = self.db.execute("SELECT * FROM documents WHERE id=%s AND organization_id=%s AND deleted_at IS NULL",
+                            (document_id, self.org)).fetchone()
+        if d is None:
+            raise LookupError("Upload not found.")
+        ops = self.db.execute(
+            "SELECT c.*, o.role FROM document_operations o JOIN operations_current c ON c.operation_id=o.operation_id "
+            "WHERE o.document_id=%s AND NOT EXISTS (SELECT 1 FROM links dup WHERE dup.from_operation_id=c.operation_id "
+            "AND dup.link_type='duplicate' AND dup.status='confirmed') ORDER BY c.op_date, c.operation_created_at",
+            (document_id,)).fetchall()
+        ex = self.db.execute("SELECT engine, text, fields, created_at FROM extractions WHERE document_id=%s "
+                             "ORDER BY created_at DESC", (document_id,)).fetchall()
+        cats = {c["id"]: c["path"] for c in self.categories()}
+        records = []
+        for r in ops:
+            j = self._json(r)
+            j["category_path"] = list(cats.get(str(r["category_id"]), ("Unclassified",))) if r["category_id"] else ["Unclassified"]
+            j["tags"] = self.tags(str(r["operation_id"]))
+            records.append(j)
+        text = next((e["text"] for e in ex if e["text"]), "")
+        analysis = next(((e["fields"] or {}).get("analysis") for e in ex if (e["fields"] or {}).get("analysis")), None)
+        reading = next(((e["fields"] or {}).get("reading") for e in ex if (e["fields"] or {}).get("reading")), None)
+        out = self._json(d)
+        out.update(records=records, text=text, analysis=analysis, reading=reading,
+                   engines=sorted({e["engine"] for e in ex}),
+                   total=str(sum((Decimal(r["amount"]) for r in ops), Decimal(0))))
+        return out
+
+    def delete_operation(self, op: str, reason: str = "deleted by a person") -> None:
+        """Delete one record: a revision marks it deleted (its history stays in the audit trail); its matches
+        to other records are undone, so nothing still counts on it."""
+        self.authorize("write")
+        with self.db.transaction():
+            self._delete_op(op, reason)
+
+    def _delete_op(self, op: str, reason: str) -> None:
+        if self.db.execute("SELECT 1 FROM operations_current WHERE operation_id=%s AND organization_id=%s",
+                           (op, self.org)).fetchone() is None:
+            raise LookupError("Record not found.")
+        self._revision(op, {"deleted": True, "agent": self.actor}, reason)
+        self.db.execute("UPDATE links SET status='rejected', decided_by=%s, decided_at=now() WHERE status <> 'rejected' "
+                        "AND link_type <> 'duplicate' AND (from_operation_id=%s OR to_operation_id=%s)", (self.actor, op, op))
+        self.db.execute("UPDATE links SET status='rejected', decided_by=%s, decided_at=now() WHERE status='proposed' "
+                        "AND link_type='duplicate' AND (from_operation_id=%s OR to_operation_id=%s)", (self.actor, op, op))
+
+    def delete_document(self, document_id: str) -> dict:
+        """Delete an upload and every record that came from it. Records it was only attached to stay."""
+        self.authorize("write")
+        d = self.db.execute("SELECT id, filename FROM documents WHERE id=%s AND organization_id=%s AND deleted_at IS NULL",
+                            (document_id, self.org)).fetchone()
+        if d is None:
+            raise LookupError("Upload not found.")
+        with self.db.transaction():
+            own = [str(r["operation_id"]) for r in self.db.execute(
+                "SELECT o.operation_id FROM document_operations o JOIN operations_current c ON c.operation_id=o.operation_id "
+                "WHERE o.document_id=%s AND (o.role IN ('source','statement') AND c.source_document_id=%s)",
+                (document_id, document_id)).fetchall()]
+            for op in own:
+                self._delete_op(op, f"its upload {d['filename']} was deleted")
+            detached = self.db.execute(
+                "DELETE FROM document_operations o USING operations_current c WHERE o.document_id=%s AND "
+                "c.operation_id=o.operation_id AND c.source_document_id IS DISTINCT FROM %s RETURNING o.operation_id",
+                (document_id, document_id)).fetchall()
+            self.db.execute("UPDATE documents SET deleted_at=now() WHERE id=%s", (document_id,))
+            self._audit("delete", "document", document_id, {"filename": d["filename"], "records_deleted": len(own),
+                                                             "detached_from": len(detached)})
+        self.reconcile()
+        return {"deleted_records": len(own), "detached": len(detached)}
+
+    def add_to_upload(self, document_id: str, kind: str, amount: str, currency: str, op_date: date,
+                      counterparty: str, category: Optional[tuple[str, ...]] = None, description: str = "") -> str:
+        """A person adds a record that the reading missed; it belongs to this upload."""
+        if self.db.execute("SELECT 1 FROM documents WHERE id=%s AND organization_id=%s AND deleted_at IS NULL",
+                           (document_id, self.org)).fetchone() is None:
+            raise LookupError("Upload not found.")
+        op = self.add_manual(kind, amount, currency, op_date, counterparty, category, description)
+        with self.db.transaction():
+            self._revision(op, {"source_document_id": document_id, "verification_reason": "Added by hand to this upload"},
+                           "added to an upload")
+            self.db.execute("INSERT INTO document_operations VALUES (%s,%s,'source') ON CONFLICT DO NOTHING",
+                            (document_id, op))
+        return op
 
     def ai_activity(self, limit: int = 200) -> list[dict]:
         return [self._json(r) for r in self.db.execute(

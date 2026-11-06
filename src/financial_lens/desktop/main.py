@@ -591,7 +591,8 @@ class MainWindow(QMainWindow):
                     untick()
                     QMessageBox.warning(self, "AI assist", f"The local model could not start: {exc}")
                     return
-            self.lens.use_local_model(url, "apertus-8b")
+            spec = local_model.selected()
+            self.lens.use_local_model(url, spec.key, spec.name + " (local)")
             if not self.ai_action.isChecked():
                 self.ai_action.blockSignals(True)
                 self.ai_action.setChecked(True)

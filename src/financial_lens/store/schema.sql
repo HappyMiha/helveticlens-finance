@@ -214,7 +214,7 @@ DO $$
 DECLARE t text;
 BEGIN
   FOREACH t IN ARRAY ARRAY['operation_revisions','extractions','audit_log','ai_activity'] LOOP
-    IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = t || '_append_only') THEN
+    IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = t || '_append_only' AND tgrelid = to_regclass(t)) THEN
       EXECUTE format('CREATE TRIGGER %I BEFORE UPDATE OR DELETE ON %I FOR EACH ROW EXECUTE FUNCTION fl_forbid_change()',
                      t || '_append_only', t);
     END IF;
@@ -427,4 +427,17 @@ CREATE TABLE IF NOT EXISTS web_sessions (
 );
 CREATE INDEX IF NOT EXISTS web_sessions_user ON web_sessions (user_id);
 
-INSERT INTO schema_version (version) VALUES (1), (2), (3), (4), (5), (6), (7) ON CONFLICT DO NOTHING;
+-- v8: deleting. A record is deleted by a revision that says so (history stays); an upload is marked deleted
+-- and the records made from it are deleted with it.
+ALTER TABLE operation_revisions ADD COLUMN IF NOT EXISTS deleted boolean NOT NULL DEFAULT false;
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS deleted_at timestamptz;
+
+CREATE OR REPLACE VIEW operations_current AS
+SELECT * FROM (
+  SELECT DISTINCT ON (r.operation_id)
+    o.organization_id, o.kind, o.created_at AS operation_created_at, r.*
+  FROM operation_revisions r JOIN operations o ON o.id = r.operation_id
+  ORDER BY r.operation_id, r.revision DESC
+) latest WHERE NOT latest.deleted;
+
+INSERT INTO schema_version (version) VALUES (1), (2), (3), (4), (5), (6), (7), (8) ON CONFLICT DO NOTHING;

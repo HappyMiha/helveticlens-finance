@@ -1,6 +1,6 @@
 [project]
 name = "financial-lens"
-version = "0.9.2"
+dynamic = ["version"]
 description = "Evidence-first, offline-first finance for people, businesses and cooperatives."
 license = "Apache-2.0"
 requires-python = ">=3.12"
@@ -22,6 +22,9 @@ financial-lens = "financial_lens.cli:main"
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+[tool.hatch.version]
+path = "src/financial_lens/__init__.py"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/financial_lens"]

@@ -198,13 +198,24 @@ def make_router(get_lens) -> APIRouter:
         return {**local_model.status(), "enabled": fl.ai_assist(), "state": ai_state(), "error": _ai_run.get("error"),
                 "progress": _ai_job}
 
+    class Install(BaseModel):
+        model: str = ""
+
     @r.post("/ui/ai/install")
-    def ai_install(fl: FinancialLens = Depends(get_lens)) -> dict:
+    def ai_install(body: Optional[Install] = None, fl: FinancialLens = Depends(get_lens)) -> dict:
         from ..ai import local_model
 
         fl.authorize("configure")
         if _ai_job.get("running"):
             return _ai_job
+        if body is not None and body.model:
+            try:
+                local_model.select(body.model)
+            except local_model.DownloadError as exc:
+                raise HTTPException(422, str(exc))
+            if local_model.installed(local_model.selected()) and local_model.server_binary() is not None:
+                set_ai(True)  # already here: switch to it
+                return {"running": False, "switched": True}
 
         def work():
             _ai_job.clear()
@@ -301,7 +312,8 @@ def set_ai(on: bool, remember: bool = True) -> None:
         with _ai_lock:
             try:
                 url = os.environ.get("FL_MODEL_URL") or local_model.start()
-                api.pool.each(lambda fl: fl.use_local_model(url, "apertus-8b"))
+                spec = local_model.selected()
+                api.pool.each(lambda fl: fl.use_local_model(url, spec.key, spec.name + " (local)"))
                 _ai_run.update(phase="on")
             except Exception as exc:
                 _ai_run.update(phase="error", error=str(exc))
